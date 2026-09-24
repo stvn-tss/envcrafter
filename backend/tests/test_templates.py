@@ -76,11 +76,15 @@ def test_logo_is_served_from_memory_with_hardened_headers(
     assert response.headers["content-type"] == "image/png"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["content-security-policy"] == "default-src 'none'; sandbox"
+    assert response.headers["cross-origin-resource-policy"] == "same-origin"
     assert response.headers["cache-control"] == "no-cache"
 
     cached = client.get(template["logo_url"], headers={"If-None-Match": response.headers["etag"]})
     assert cached.status_code == 304
     assert cached.content == b""
+    assert cached.headers["x-content-type-options"] == "nosniff"
+    assert cached.headers["content-security-policy"] == "default-src 'none'; sandbox"
+    assert cached.headers["cross-origin-resource-policy"] == "same-origin"
 
 
 def test_logo_route_validates_the_template_id(client: TestClient) -> None:
