@@ -1,0 +1,44 @@
+id: media-stack
+name: Media Stack
+category: media
+summary: Jellyfin streaming with Sonarr, Radarr, Prowlarr and qBittorrent on a shared media volume.
+description: >-
+  A complete media automation stack. Prowlarr manages indexers, Sonarr (series)
+  and Radarr (movies) search and organize releases, qBittorrent downloads them,
+  and Jellyfin streams the library. All services share one "media" volume
+  mounted at /data (Jellyfin reads it at /media). Each tool has its own web UI.
+components:
+  - service: jellyfin
+    name: Jellyfin 10.11
+    role: Media server streaming the library to browsers, TVs and mobile apps.
+  - service: sonarr
+    name: Sonarr 4
+    role: TV series manager that finds, downloads (via qBittorrent) and renames episodes.
+  - service: radarr
+    name: Radarr 6
+    role: Movie manager, same workflow as Sonarr for films.
+  - service: prowlarr
+    name: Prowlarr 2
+    role: Indexer manager that feeds search results to Sonarr and Radarr.
+  - service: qbittorrent
+    name: qBittorrent 5.2
+    role: BitTorrent download client with a web UI.
+expose:
+  - service: jellyfin
+    port: 8096
+  - service: sonarr
+    port: 8989
+  - service: radarr
+    port: 7878
+  - service: prowlarr
+    port: 9696
+  - service: qbittorrent
+    port: 8080
+secrets: []
+needs_internet: true
+access_notes:
+  - Jellyfin opens a setup wizard on first visit. Add a library pointing to /media.
+  - "Inside the stack, services reach each other by name: http://sonarr:8989, http://radarr:7878, http://prowlarr:9696, http://qbittorrent:8080."
+  - "qBittorrent prints a temporary password for user admin in its logs: docker logs ec-<project>-qbittorrent-1"
+  - Only download content you have the right to download.
+tags: [media, multimedia, jellyfin, sonarr, radarr, prowlarr, qbittorrent, streaming, arr]

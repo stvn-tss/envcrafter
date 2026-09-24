@@ -1,0 +1,24 @@
+# Intentionally vulnerable: never attached to an egress network, localhost routing only.
+id: owasp-juice-shop
+name: OWASP Juice Shop
+category: security-lab
+summary: Intentionally insecure web shop covering the OWASP Top 10, with a built-in scoreboard.
+description: >-
+  OWASP Juice Shop is a modern, deliberately vulnerable web application
+  (Angular + Node.js) with more than 100 hacking challenges: injection, broken
+  authentication, XSS, access control, and more. A hidden scoreboard tracks
+  your progress. It runs on an isolated network with no Internet access and is
+  only reachable from this machine. Never expose it publicly.
+components:
+  - service: juice-shop
+    name: OWASP Juice Shop 20
+    role: Vulnerable web application and challenge scoreboard (Node.js, SQLite).
+expose:
+  - service: juice-shop
+    port: 3000
+secrets: []
+needs_internet: false
+access_notes:
+  - Finding the scoreboard is the first challenge.
+  - Data is reset every time the container restarts.
+tags: [owasp, juice, pentest, vulnerable, ctf, web, xss, sqli]

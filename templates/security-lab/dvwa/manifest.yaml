@@ -1,0 +1,27 @@
+# Intentionally vulnerable: never attached to an egress network, localhost routing only.
+id: dvwa
+name: DVWA
+category: security-lab
+summary: Damn Vulnerable Web Application to practise SQL injection, XSS, CSRF and more.
+description: >-
+  DVWA is a classic PHP/MariaDB web application that is vulnerable on purpose,
+  with four security levels (low to impossible) to compare vulnerable and
+  hardened code. Modules cover brute force, command injection, CSRF, file
+  inclusion, file upload, SQL injection, XSS and more. Isolated network, no
+  Internet access, reachable only from this machine.
+components:
+  - service: dvwa
+    name: DVWA
+    role: Vulnerable PHP web application (Apache + PHP).
+  - service: mariadb
+    name: MariaDB 11.4 LTS
+    role: Database used by the SQL injection exercises.
+expose:
+  - service: dvwa
+    port: 80
+secrets: [DB_PASSWORD, DB_ROOT_PASSWORD]
+needs_internet: false
+access_notes:
+  - "First visit: open Setup / Reset DB and click Create / Reset Database, then log in with admin / password."
+  - The default security level is low; change it in DVWA Security.
+tags: [dvwa, owasp, pentest, vulnerable, php, sqli, xss, csrf]

@@ -1,0 +1,142 @@
+# EnvCrafter control plane: reverse proxy, two filtering socket proxies, API.
+#
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   -> http://envcrafter.localhost
+#
+# Least privilege on the Docker socket: only the two socket proxies mount it,
+# each exposing the smallest API surface its client needs. Traefik and the API
+# talk to their own proxy over a dedicated internal network.
+
+name: envcrafter
+
+x-hardening: &hardening
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+
+services:
+  traefik:
+    <<: *hardening
+    image: docker.io/library/traefik:v3.7.13
+    container_name: envcrafter-traefik
+    user: "65534:65534"
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    ports:
+      # Loopback only: environments are never reachable from the LAN.
+      - "127.0.0.1:80:8081"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+    networks: [ingress, control, docker-ro]
+    depends_on: [socket-proxy-traefik]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--configFile=/etc/traefik/traefik.yml"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Read-only view for Traefik: list/inspect containers and follow events.
+  socket-proxy-traefik:
+    <<: *hardening
+    image: lscr.io/linuxserver/socket-proxy:3.4.4
+    container_name: envcrafter-socket-proxy-traefik
+    environment:
+      CONTAINERS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    tmpfs: [/run]
+    networks: [docker-ro]
+
+  # What `docker compose` needs to deploy stacks, nothing more:
+  # no exec, no build, no swarm, no system/plugins/secrets endpoints.
+  # The proxy filters endpoints, not payloads: the compose policy is what
+  # prevents privileged containers or host mounts from ever being requested.
+  socket-proxy-api:
+    <<: *hardening
+    image: lscr.io/linuxserver/socket-proxy:3.4.4
+    container_name: envcrafter-socket-proxy-api
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      IMAGES: 1
+      POST: 1
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      EXEC: 0
+      BUILD: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    tmpfs: [/run]
+    networks: [docker-api]
+
+  api:
+    <<: *hardening
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    image: envcrafter-api:local
+    container_name: envcrafter-api
+    env_file:
+      # Optional: holds ENVCRAFTER_LLM_API_KEY. Never baked into the image.
+      - path: ../.env
+        required: false
+    environment:
+      ENVCRAFTER_ENVIRONMENT: production
+      ENVCRAFTER_ENGINE: docker
+      ENVCRAFTER_DOCKER_HOST: tcp://socket-proxy-api:2375
+      ENVCRAFTER_TRAEFIK_CONTAINER: envcrafter-traefik
+      ENVCRAFTER_ALLOWED_ORIGINS: '["http://envcrafter.localhost"]'
+      ENVCRAFTER_ALLOWED_HOSTS: '["envcrafter.localhost", "127.0.0.1"]'
+    tmpfs: [/tmp]
+    volumes:
+      - workspaces:/data/workspaces
+    labels:
+      envcrafter.managed: "true"
+      traefik.enable: "true"
+      traefik.docker.network: envcrafter-control
+      traefik.http.routers.envcrafter.rule: Host(`envcrafter.localhost`)
+      traefik.http.routers.envcrafter.entrypoints: web
+      traefik.http.services.envcrafter.loadbalancer.server.port: "8000"
+    networks: [control, docker-api, api-egress]
+    depends_on: [socket-proxy-api, traefik]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+networks:
+  # The only network with a published port (Traefik).
+  ingress:
+    name: envcrafter-ingress
+    ipam:
+      config:
+        - subnet: 172.31.253.0/24
+  # Traefik <-> API.
+  control:
+    name: envcrafter-control
+    internal: true
+  # Traefik <-> its read-only socket proxy.
+  docker-ro:
+    name: envcrafter-docker-ro
+    internal: true
+  # API <-> its socket proxy.
+  docker-api:
+    name: envcrafter-docker-api
+    internal: true
+  # API -> LLM provider (HTTPS). Image pulls are done by the daemon, not the API.
+  api-egress:
+    name: envcrafter-api-egress
+
+volumes:
+  workspaces:
+    name: envcrafter-workspaces

@@ -1,0 +1,4 @@
+# LF everywhere: the same bytes on every platform and inside Linux containers.
+* text=auto eol=lf
+*.png binary
+*.webp binary

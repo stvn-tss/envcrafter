@@ -1,0 +1,41 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+services:
+  glpi:
+    image: glpi/glpi:11.0.9
+    environment:
+      GLPI_DB_HOST: mariadb
+      GLPI_DB_PORT: "3306"
+      GLPI_DB_NAME: glpi
+      GLPI_DB_USER: glpi
+      GLPI_DB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - glpi-data:/var/glpi
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5m
+
+  mariadb:
+    image: mariadb:11.4.13
+    environment:
+      MARIADB_DATABASE: glpi
+      MARIADB_USER: glpi
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 1m
+
+volumes:
+  glpi-data:
+  mariadb-data:

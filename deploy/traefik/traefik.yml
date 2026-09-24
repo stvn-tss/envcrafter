@@ -1,0 +1,43 @@
+# Traefik static configuration for EnvCrafter.
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+entryPoints:
+  web:
+    # Published on 127.0.0.1:80 only (see docker-compose.yml).
+    address: ":8081"
+    http:
+      # Applied to every router: only traffic that entered through the
+      # published port is served. A container that reaches Traefik over its
+      # project's edge network cannot use it to reach the EnvCrafter API or
+      # another project's UI.
+      middlewares:
+        - host-only@file
+      # Drop headers like X_Forwarded_For that PHP/CGI backends (GLPI, DVWA...)
+      # would read as the X-Forwarded-For header Traefik manages.
+      aliasHeadersStrategy: delete
+  ping:
+    address: ":8082"
+    http:
+      aliasHeadersStrategy: delete
+
+ping:
+  entryPoint: ping
+
+api:
+  dashboard: false
+
+providers:
+  docker:
+    # Read-only socket proxy: Traefik can list containers, nothing else.
+    endpoint: tcp://socket-proxy-traefik:2375
+    exposedByDefault: false
+    # Only containers created by EnvCrafter can declare routes.
+    constraints: Label(`envcrafter.managed`,`true`)
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: false
+
+log:
+  level: INFO

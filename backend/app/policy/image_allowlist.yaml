@@ -1,0 +1,94 @@
+# Every image a stack may run, for templates AND for LLM-generated stacks.
+#
+# Rules enforced when the application starts:
+# - canonical reference (registry/namespace/name:tag or @sha256 digest);
+# - pinned: no floating tag (latest, nightly, edge, *-latest...);
+# - an image must be listed here before any template or the LLM can use it.
+# Bumping a version is a reviewed change to this file (and to the templates).
+#
+# `description` is shown to the LLM: document the environment variables a
+# stack needs, so custom stacks are configured the way the image expects.
+
+images:
+  - ref: docker.io/library/mariadb:11.4.13
+    title: MariaDB 11.4 LTS
+    description: >-
+      MySQL-compatible relational database. Env: MARIADB_DATABASE, MARIADB_USER,
+      MARIADB_PASSWORD, MARIADB_ROOT_PASSWORD. Data in /var/lib/mysql. Healthcheck:
+      healthcheck.sh --connect --innodb_initialized.
+
+  - ref: docker.io/glpi/glpi:11.0.9
+    title: GLPI 11
+    description: >-
+      IT asset management and service desk. Env: GLPI_DB_HOST, GLPI_DB_PORT,
+      GLPI_DB_NAME, GLPI_DB_USER, GLPI_DB_PASSWORD (installs the database on first
+      start). Data in /var/glpi. Needs MariaDB.
+    web_port: 80
+
+  - ref: docker.io/zabbix/zabbix-server-mysql:alpine-7.0.31
+    title: Zabbix server 7.0 LTS
+    description: >-
+      Zabbix monitoring server. Env: DB_SERVER_HOST, MYSQL_DATABASE, MYSQL_USER,
+      MYSQL_PASSWORD. Needs MariaDB started with utf8mb4_bin and
+      log_bin_trust_function_creators=1.
+
+  - ref: docker.io/zabbix/zabbix-web-nginx-mysql:alpine-7.0.31
+    title: Zabbix web 7.0 LTS
+    description: >-
+      Zabbix web frontend (nginx). Env: ZBX_SERVER_HOST, DB_SERVER_HOST,
+      MYSQL_DATABASE, MYSQL_USER, MYSQL_PASSWORD, PHP_TZ.
+    web_port: 8080
+
+  - ref: docker.io/jellyfin/jellyfin:10.11.11
+    title: Jellyfin 10.11
+    description: >-
+      Media streaming server. Volumes: /config, /cache, and media libraries
+      (e.g. /media). Env: JELLYFIN_PublishedServerUrl.
+    web_port: 8096
+
+  - ref: lscr.io/linuxserver/sonarr:4.0.20
+    title: Sonarr 4
+    description: >-
+      TV series collection manager. Env: PUID, PGID, TZ. Volumes: /config, /data.
+    web_port: 8989
+
+  - ref: lscr.io/linuxserver/radarr:6.4.4
+    title: Radarr 6
+    description: >-
+      Movie collection manager. Env: PUID, PGID, TZ. Volumes: /config, /data.
+    web_port: 7878
+
+  - ref: lscr.io/linuxserver/prowlarr:2.6.5
+    title: Prowlarr 2
+    description: >-
+      Indexer manager for Sonarr and Radarr. Env: PUID, PGID, TZ. Volume: /config.
+    web_port: 9696
+
+  - ref: lscr.io/linuxserver/qbittorrent:5.2.3
+    title: qBittorrent 5.2
+    description: >-
+      BitTorrent client with a web UI. Env: PUID, PGID, TZ, WEBUI_PORT=8080.
+      Volumes: /config, downloads under /data. Prints a temporary admin password
+      in its logs on first start.
+    web_port: 8080
+
+  - ref: docker.io/advplyr/audiobookshelf:2.36.1
+    title: Audiobookshelf 2.36
+    description: >-
+      Audiobook and podcast server with web upload. Volumes: /config, /metadata,
+      /audiobooks, /podcasts. First visit creates the root account.
+    web_port: 80
+
+  - ref: docker.io/bkimminich/juice-shop:v20.2.0
+    title: OWASP Juice Shop 20
+    description: Intentionally insecure web shop (OWASP Top 10 training). No configuration.
+    web_port: 3000
+    vulnerable: true
+
+  - ref: ghcr.io/digininja/dvwa@sha256:ed35515e9111801e6e386a6fbb11165508cc7f72e0cb8da4dbb3df70182986c6
+    title: DVWA
+    description: >-
+      Damn Vulnerable Web Application (PHP). Env: DB_SERVER, DB_DATABASE, DB_USER,
+      DB_PASSWORD, DEFAULT_SECURITY_LEVEL (low|medium|high|impossible). Needs MariaDB.
+    web_port: 80
+    vulnerable: true

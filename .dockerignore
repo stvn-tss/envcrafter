@@ -1,0 +1,10 @@
+# Allow-list: only what backend/Dockerfile copies enters the build context, so
+# secrets (.env), workspaces and local tooling can never reach the builder.
+*
+!backend/pyproject.toml
+!backend/uv.lock
+!backend/app/
+!templates/
+!frontend/
+**/__pycache__/
+**/*.py[cod]

@@ -1,0 +1,71 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+# Every service needs outbound access (metadata, indexers, downloads): egress.
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:10.11.11
+    environment:
+      JELLYFIN_PublishedServerUrl: http://${EC_HOSTNAME}
+    volumes:
+      - jellyfin-config:/config
+      - jellyfin-cache:/cache
+      - media:/media:ro
+    networks: [internal, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8096/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 2m
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:4.0.20
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+    volumes:
+      - sonarr-config:/config
+      - media:/data
+    networks: [internal, egress]
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:6.4.4
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+    volumes:
+      - radarr-config:/config
+      - media:/data
+    networks: [internal, egress]
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:2.6.5
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+    volumes:
+      - prowlarr-config:/config
+    networks: [internal, egress]
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:5.2.3
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Etc/UTC
+      WEBUI_PORT: "8080"
+    volumes:
+      - qbittorrent-config:/config
+      - media:/data
+    networks: [internal, egress]
+
+volumes:
+  media:
+  jellyfin-config:
+  jellyfin-cache:
+  sonarr-config:
+  radarr-config:
+  prowlarr-config:
+  qbittorrent-config:

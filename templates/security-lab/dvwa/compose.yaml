@@ -1,0 +1,40 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+# Vulnerable lab: no egress network, ever. The DVWA project only publishes a
+# `latest` tag, so the image is pinned by digest.
+services:
+  dvwa:
+    image: ghcr.io/digininja/dvwa@sha256:ed35515e9111801e6e386a6fbb11165508cc7f72e0cb8da4dbb3df70182986c6
+    environment:
+      DB_SERVER: mariadb
+      DB_DATABASE: dvwa
+      DB_USER: dvwa
+      DB_PASSWORD: ${DB_PASSWORD}
+      DEFAULT_SECURITY_LEVEL: low
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost/login.php || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 1m
+
+  mariadb:
+    image: mariadb:11.4.13
+    environment:
+      MARIADB_DATABASE: dvwa
+      MARIADB_USER: dvwa
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 1m
+
+volumes:
+  mariadb-data:

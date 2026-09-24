@@ -1,0 +1,8 @@
+http:
+  middlewares:
+    host-only:
+      ipAllowList:
+        # Subnet of the envcrafter-ingress network (docker-compose.yml): the
+        # published port delivers host traffic from its gateway.
+        sourceRange:
+          - 172.31.253.0/24

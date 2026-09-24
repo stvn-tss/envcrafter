@@ -1,0 +1,41 @@
+"""Dependency providers. Shared services live on `app.state`, created in the lifespan.
+
+`HTTPConnection` is the common base of `Request` and `WebSocket`, so the same
+providers serve HTTP routes and WebSocket endpoints.
+"""
+
+from typing import Annotated
+
+from fastapi import Depends
+from starlette.requests import HTTPConnection
+
+from app.core.config import Settings
+from app.services.event_bus import JobEventBus
+from app.services.orchestrator import Orchestrator
+from app.services.template_catalog import TemplateCatalog
+
+
+def get_settings_from_app(conn: HTTPConnection) -> Settings:
+    settings: Settings = conn.app.state.settings
+    return settings
+
+
+def get_event_bus(conn: HTTPConnection) -> JobEventBus:
+    bus: JobEventBus = conn.app.state.event_bus
+    return bus
+
+
+def get_catalog(conn: HTTPConnection) -> TemplateCatalog:
+    catalog: TemplateCatalog = conn.app.state.catalog
+    return catalog
+
+
+def get_orchestrator(conn: HTTPConnection) -> Orchestrator:
+    orchestrator: Orchestrator = conn.app.state.orchestrator
+    return orchestrator
+
+
+SettingsDep = Annotated[Settings, Depends(get_settings_from_app)]
+EventBusDep = Annotated[JobEventBus, Depends(get_event_bus)]
+CatalogDep = Annotated[TemplateCatalog, Depends(get_catalog)]
+OrchestratorDep = Annotated[Orchestrator, Depends(get_orchestrator)]

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- No inline scripts/styles and no third-party origins: an injected string can never execute. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>EnvCrafter</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <script type="module" src="/js/main.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>EnvCrafter</div>
+    <p class="tagline">On-demand, isolated, self-hosted environments</p>
+  </header>
+
+  <main class="layout">
+    <div class="main-column">
+      <section class="panel" aria-labelledby="prompt-title">
+        <h2 id="prompt-title">Describe an environment</h2>
+        <form id="prompt-form" class="prompt-form">
+          <label for="prompt-input" class="visually-hidden">Environment description</label>
+          <textarea id="prompt-input" name="prompt" rows="3" minlength="3" maxlength="2000" required
+                    aria-describedby="prompt-hints"
+                    placeholder="e.g. Deploy a test ITSM environment with a service desk and asset inventory"></textarea>
+          <div id="prompt-suggestions" class="suggestions" role="group" aria-label="Example requests" hidden></div>
+          <p id="prompt-error" class="inline-alert" role="alert" hidden></p>
+          <div class="prompt-actions">
+            <p id="prompt-hints" class="prompt-hints hint">
+              <span>Any language works</span>
+              <span><kbd id="shortcut-modifier">Ctrl</kbd> + <kbd>Enter</kbd> to send</span>
+              <span id="prompt-counter" class="prompt-counter" hidden></span>
+            </p>
+            <button type="submit" class="button primary" data-deploy>Generate &amp; deploy</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="catalog" class="panel" aria-labelledby="catalog-title">
+        <div class="panel-header">
+          <h2 id="catalog-title">Templates</h2>
+          <div class="search" data-icon="search">
+            <label for="template-search" class="visually-hidden">Search templates</label>
+            <input id="template-search" class="input" type="search" placeholder="Search templates"
+                   autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+        <div id="category-filters" class="filters" role="group" aria-label="Filter by category"></div>
+        <div id="template-grid" class="template-grid" aria-busy="true">
+          <p class="hint">Loading templates…</p>
+        </div>
+        <p id="catalog-empty" class="catalog-empty hint" hidden>
+          No template matches your search.
+          <button type="button" class="text-button" id="catalog-reset">Clear filters</button>
+        </p>
+      </section>
+    </div>
+
+    <aside id="status-panel" class="panel status-panel" aria-labelledby="status-title">
+      <div class="panel-header">
+        <h2 id="status-title" tabindex="-1">Deployment status</h2>
+        <span id="status-badge" class="status-badge" data-tone="idle">Idle</span>
+      </div>
+      <div id="connection-note" class="connection-note" hidden>
+        <span id="connection-text"></span>
+        <button type="button" class="text-button" id="connection-retry" hidden>Reconnect</button>
+      </div>
+
+      <div id="job-empty" class="empty-state">
+        <ol class="how-it-works">
+          <li><div><strong>Choose</strong><span>Pick a template or describe the environment you need.</span></div></li>
+          <li><div><strong>Watch</strong><span>Follow every step live in this panel.</span></div></li>
+          <li><div><strong>Open</strong><span>Get its web address and sign-in details.</span></div></li>
+        </ol>
+        <p class="hint">Environments keep running until you remove them.</p>
+      </div>
+
+      <div id="job-view" hidden>
+        <div class="job-head">
+          <strong id="job-title"></strong>
+          <span id="job-elapsed" class="hint job-elapsed"></span>
+        </div>
+        <div class="progress" id="job-progress" role="progressbar" aria-label="Deployment progress"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="progress-bar" id="job-progress-bar"></div>
+        </div>
+        <p id="job-progress-label" class="hint progress-label"></p>
+        <div id="job-result" class="job-result" hidden></div>
+        <div class="steps-head">
+          <h3>Steps</h3>
+          <button type="button" class="text-button" id="copy-logs" data-icon="copy">Copy logs</button>
+        </div>
+        <ol id="step-list" class="step-list"></ol>
+      </div>
+      <!-- Screen readers hear step changes and the outcome, not every log line. -->
+      <p id="status-announcer" class="visually-hidden" aria-live="polite"></p>
+    </aside>
+  </main>
+
+  <button type="button" id="job-pill" class="job-pill" hidden>
+    <span class="job-pill-dot" aria-hidden="true"></span>
+    <span id="job-pill-text" class="job-pill-text"></span>
+  </button>
+  <div id="toasts" class="toast-region"></div>
+
+  <dialog id="template-dialog" class="dialog" aria-labelledby="dialog-title">
+    <div class="dialog-header">
+      <div id="dialog-heading" class="dialog-heading"></div>
+      <button type="button" class="icon-button" id="dialog-close" aria-label="Close" data-icon="close"></button>
+    </div>
+    <div id="dialog-body" class="dialog-body"></div>
+    <div class="dialog-footer">
+      <div class="field">
+        <label for="project-name">Project name <span class="optional">(optional)</span></label>
+        <input id="project-name" class="input" name="project_name" maxlength="32"
+               autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="project-name-hint">
+        <p id="project-name-hint" class="field-hint"></p>
+      </div>
+      <div class="footer-actions">
+        <button type="button" class="button" id="dialog-cancel">Close</button>
+        <button type="button" class="button primary" id="dialog-deploy">Deploy</button>
+      </div>
+      <p id="dialog-error" class="inline-alert" role="alert" hidden></p>
+    </div>
+  </dialog>
+
+  <dialog id="remove-dialog" class="dialog small" aria-labelledby="remove-title">
+    <form id="remove-form" class="dialog-form">
+      <div class="dialog-header">
+        <h2 id="remove-title"></h2>
+        <button type="button" class="icon-button" data-close aria-label="Close" data-icon="close"></button>
+      </div>
+      <div class="dialog-body">
+        <p>This permanently deletes:</p>
+        <ul id="remove-items" class="notes"></ul>
+        <div class="field wide">
+          <label for="remove-confirm" id="remove-confirm-label"></label>
+          <input id="remove-confirm" class="input" autocomplete="off" spellcheck="false" autocapitalize="none">
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <p id="remove-error" class="inline-alert" role="alert" hidden></p>
+        <div class="footer-actions">
+          <button type="button" class="button" data-close>Cancel</button>
+          <button type="submit" class="button danger-solid" id="remove-submit" disabled>Remove environment</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

@@ -1,0 +1,54 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+services:
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-mysql:alpine-7.0.31
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      DB_SERVER_HOST: mariadb
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      PHP_TZ: Etc/UTC
+    depends_on:
+      zabbix-server:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 3m
+
+  zabbix-server:
+    image: zabbix/zabbix-server-mysql:alpine-7.0.31
+    environment:
+      DB_SERVER_HOST: mariadb
+      MYSQL_DATABASE: zabbix
+      MYSQL_USER: zabbix
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  mariadb:
+    image: mariadb:11.4.13
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_bin
+      - --log-bin-trust-function-creators=1
+    environment:
+      MARIADB_DATABASE: zabbix
+      MARIADB_USER: zabbix
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 1m
+
+volumes:
+  mariadb-data:

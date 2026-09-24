@@ -1,0 +1,28 @@
+id: zabbix
+name: Zabbix
+category: itsm
+summary: Infrastructure and network monitoring (Zabbix 7.0 LTS), in the spirit of Centreon.
+description: >-
+  Zabbix is an enterprise-grade open-source monitoring platform: hosts,
+  services, SNMP devices, triggers, dashboards and alerting. It fills the same
+  role as Centreon, which has no maintained official container image. The
+  server creates its database schema on first start (about 1 minute).
+components:
+  - service: zabbix-web
+    name: Zabbix web 7.0 LTS
+    role: Web frontend (nginx + PHP) for dashboards, configuration and reports.
+  - service: zabbix-server
+    name: Zabbix server 7.0 LTS
+    role: Monitoring engine collecting metrics and evaluating triggers.
+  - service: mariadb
+    name: MariaDB 11.4 LTS
+    role: Database storing configuration and monitoring history.
+expose:
+  - service: zabbix-web
+    port: 8080
+secrets: [DB_PASSWORD, DB_ROOT_PASSWORD]
+needs_internet: false
+access_notes:
+  - "Default account: Admin / zabbix. Change it after the first login."
+  - "The stack is isolated: to monitor other environments, link it to them later with a dedicated link network."
+tags: [itsm, zabbix, monitoring, supervision, centreon, nagios, snmp, alerting]

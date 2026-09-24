@@ -1,0 +1,25 @@
+id: glpi
+name: GLPI
+category: itsm
+summary: IT asset management and service desk, ready for ticketing and inventory tests.
+description: >-
+  GLPI is an open-source ITSM suite: helpdesk ticketing, IT asset inventory,
+  CMDB, contracts and license management. The database is installed
+  automatically on first start (1 to 2 minutes), then GLPI is reachable in
+  your browser. Everything stays on an isolated network with no Internet access.
+components:
+  - service: glpi
+    name: GLPI 11
+    role: Web application (Apache + PHP 8.5) for service desk, inventory and CMDB.
+  - service: mariadb
+    name: MariaDB 11.4 LTS
+    role: Relational database storing all GLPI data.
+expose:
+  - service: glpi
+    port: 80
+secrets: [DB_PASSWORD, DB_ROOT_PASSWORD]
+needs_internet: false
+access_notes:
+  - "Default accounts: glpi/glpi (super-admin), tech/tech, normal/normal, post-only/postonly. Change these passwords after the first login."
+  - Database credentials are random and stored only in the project's workspace .env file.
+tags: [itsm, glpi, helpdesk, servicedesk, ticketing, inventory, cmdb, asset]

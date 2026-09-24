@@ -1,0 +1,27 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+services:
+  audiobookshelf:
+    image: advplyr/audiobookshelf:2.36.1
+    volumes:
+      - config:/config
+      - metadata:/metadata
+      - audiobooks:/audiobooks
+      - podcasts:/podcasts
+    networks: [internal, egress]
+    healthcheck:
+      # The image ships no curl/wget: probe the health endpoint with Node itself.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost/healthcheck').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 1m
+
+volumes:
+  config:
+  metadata:
+  audiobooks:
+  podcasts:
