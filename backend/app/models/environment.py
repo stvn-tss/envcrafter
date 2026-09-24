@@ -1,11 +1,13 @@
 """Environment inventory contracts: what a workspace records about itself (meta.json)."""
 
 from datetime import datetime
+from enum import StrEnum
 from typing import Annotated, Literal
+from uuid import UUID
 
-from pydantic import Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
-from app.models.common import ProjectName, StrictModel, TemplateId
+from app.models.common import JobMode, ProjectName, StrictModel, TemplateId
 from app.models.template import ServiceName
 
 DisplayName = Annotated[str, StringConstraints(min_length=1, max_length=60)]
@@ -43,3 +45,44 @@ class EnvironmentMeta(StrictModel):
     services: list[EnvironmentService] = Field(min_length=1, max_length=12)
     urls: list[WebEndpoint] = Field(default_factory=list, max_length=6)
     volumes: list[str] = Field(default_factory=list, max_length=16)
+
+
+class EnvironmentState(StrEnum):
+    PENDING = "pending"  # a deployment job runs, the workspace does not exist yet
+    RUNNING = "running"  # every service runs, none unhealthy or starting
+    STARTING = "starting"  # every service runs, at least one healthcheck is starting
+    DEGRADED = "degraded"  # some services run and some do not (or are unhealthy)
+    STOPPED = "stopped"  # containers exist, none runs
+    MISSING = "missing"  # no container at all
+    UNKNOWN = "unknown"  # the engine could not be queried
+
+
+class ServiceView(BaseModel):
+    service: str
+    name: str
+    image: str | None
+    state: str | None  # Docker state ("running", "exited"...); None without a container
+    health: str | None  # "healthy" | "unhealthy" | "starting" | None
+
+
+class ActiveJobRef(BaseModel):
+    job_id: UUID
+    mode: JobMode
+    events_url: str
+
+
+class EnvironmentView(BaseModel):
+    project: str
+    title: str
+    origin: Literal["template", "prompt"] | None  # None: workspace without meta.json
+    template_id: str | None
+    created_at: datetime | None
+    state: EnvironmentState
+    services: list[ServiceView]
+    urls: list[WebEndpoint]
+    volumes: list[str]
+    job: ActiveJobRef | None  # the job running on this environment, if any
+
+
+class EnvironmentListResponse(BaseModel):
+    environments: list[EnvironmentView]  # newest first

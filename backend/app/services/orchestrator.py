@@ -21,11 +21,12 @@ import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID, uuid4
 
 from app.core.config import Settings
 from app.engine.base import Engine, EngineError, StackHandle
+from app.models.common import JobMode
 from app.models.deployment import (
     EventType,
     JobStatus,
@@ -54,10 +55,13 @@ from app.workspace.renderer import (
 logger = logging.getLogger(__name__)
 
 AnyDeploymentRequest = TemplateDeploymentRequest | PromptDeploymentRequest
-JobKind = Literal["template", "prompt", "removal"]
 
 _ACTIVE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING})
 _SECRET_NAME_RE = re.compile(SECRET_NAME_PATTERN)
+
+
+def job_events_url(job_id: UUID) -> str:
+    return f"/ws/jobs/{job_id}"
 
 
 class UnknownTemplateError(LookupError):
@@ -97,7 +101,7 @@ class Candidate:
 @dataclass
 class Job:
     id: UUID
-    mode: JobKind
+    mode: JobMode
     project_name: str
     request: AnyDeploymentRequest | None = None
     template: Template | None = None
@@ -168,6 +172,23 @@ class Orchestrator:
 
     def get(self, job_id: UUID) -> Job | None:
         return self._jobs.get(job_id)
+
+    def list_jobs(self, *, active_only: bool = False) -> list[Job]:
+        """Retained jobs, newest first (finished ones are kept `job_retention_seconds`)."""
+        jobs = [
+            job for job in self._jobs.values() if not active_only or job.status in _ACTIVE_STATUSES
+        ]
+        return sorted(jobs, key=lambda job: job.created_at, reverse=True)
+
+    def active_job(self, project: str) -> Job | None:
+        return next(
+            (
+                job
+                for job in self._jobs.values()
+                if job.project_name == project and job.status in _ACTIVE_STATUSES
+            ),
+            None,
+        )
 
     @property
     def has_translator(self) -> bool:
@@ -512,17 +533,29 @@ class Orchestrator:
                 ctx.log(f"Web UI of {endpoint.service}: {endpoint.url}")
             ctx.job.url = ctx.job.urls[0].url
 
-    async def _teardown(self, ctx: StepContext) -> None:
-        project = ctx.job.project_name
+    async def _existing_stack(self, project: str) -> tuple[StackHandle, list[str]]:
+        """Stack handle and service names of an existing workspace. The edge network is
+        only set when the rendered file declares one (stacks without a web UI have none)."""
         workspace = await asyncio.to_thread(self._workspaces.get, project)
         if workspace is None:
-            raise StepFailedError("This environment has no workspace to remove.")
+            raise StepFailedError("This environment has no workspace.")
+        document = await asyncio.to_thread(self._workspaces.read_compose, project)
+        networks = document.get("networks")
+        services = document.get("services")
         stack = StackHandle(
             project=project,
             compose_project=compose_project_name(project),
             compose_file=workspace.compose_file,
-            edge_network=edge_network_name(project),
+            edge_network=(
+                edge_network_name(project)
+                if isinstance(networks, dict) and "edge" in networks
+                else None
+            ),
         )
+        return stack, list(services) if isinstance(services, dict) else []
+
+    async def _teardown(self, ctx: StepContext) -> None:
+        stack, _ = await self._existing_stack(ctx.job.project_name)
         await self._engine.remove(stack, ctx.log)
 
     async def _remove_workspace(self, ctx: StepContext) -> None:

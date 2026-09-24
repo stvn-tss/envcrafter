@@ -29,6 +29,7 @@ from app.engine.docker_compose import DockerComposeEngine
 from app.engine.simulated import SimulatedEngine
 from app.policy.images import ImageAllowlist
 from app.services.event_bus import JobEventBus
+from app.services.inventory import EnvironmentInventory
 from app.services.orchestrator import Orchestrator
 from app.services.template_catalog import TemplateCatalog
 from app.translator.client import LLMTranslator, Translator
@@ -105,12 +106,14 @@ def create_app(
             history_size=settings.event_history_size,
             queue_size=settings.subscriber_queue_size,
         )
+        workspaces = WorkspaceManager(settings.workspaces_dir)
+        engine = build_engine(settings)
         orchestrator = Orchestrator(
             bus=bus,
             catalog=catalog,
             allowlist=allowlist,
-            workspaces=WorkspaceManager(settings.workspaces_dir),
-            engine=build_engine(settings),
+            workspaces=workspaces,
+            engine=engine,
             translator=translator,
             settings=settings,
         )
@@ -119,6 +122,12 @@ def create_app(
         app.state.catalog = catalog
         app.state.event_bus = bus
         app.state.orchestrator = orchestrator
+        app.state.inventory = EnvironmentInventory(
+            workspaces=workspaces,
+            engine=engine,
+            jobs=orchestrator,
+            cache_seconds=settings.inventory_cache_seconds,
+        )
         try:
             yield
         finally:

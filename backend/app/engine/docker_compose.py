@@ -10,15 +10,30 @@ Security properties:
 """
 
 import asyncio
+import logging
 import os
 import re
+from collections.abc import Sequence
 
-from app.engine.base import EngineError, LogSink, StackHandle
+from app.engine.base import EngineError, LogSink, ServiceStatus, StackHandle
+from app.models.common import PROJECT_NAME_PATTERN
+from app.models.template import SERVICE_NAME_PATTERN
+from app.workspace.renderer import MANAGED_LABEL, PROJECT_LABEL, SERVICE_LABEL
+
+logger = logging.getLogger(__name__)
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 # Per-layer download chatter would flood the UI: keep only meaningful lines.
 _NOISE_RE = re.compile(r"(Downloading|Extracting|Waiting|Verifying Checksum|Download complete)")
 _MAX_LINE = 300
+_MAX_CAPTURE = 1024 * 1024
+_PROJECT_RE = re.compile(PROJECT_NAME_PATTERN)
+_SERVICE_RE = re.compile(SERVICE_NAME_PATTERN)
+_HEALTH_VALUES = frozenset({"healthy", "unhealthy", "starting"})
+_STATUS_FORMAT = (
+    f'{{{{.Label "{PROJECT_LABEL}"}}}}\t{{{{.Label "{SERVICE_LABEL}"}}}}'
+    "\t{{.State}}\t{{.HealthStatus}}"
+)
 
 
 class DockerComposeEngine:
@@ -75,6 +90,27 @@ class DockerComposeEngine:
             timeout=300,
         )
 
+    async def status(self, stacks: Sequence[StackHandle]) -> dict[str, list[ServiceStatus]]:
+        wanted = {stack.project for stack in stacks}
+        if not wanted:
+            return {}
+        # One call for every project; only objects EnvCrafter labelled are listed.
+        output = await self._capture(
+            [
+                "ps",
+                "--all",
+                "--filter",
+                f"label={MANAGED_LABEL}=true",
+                "--filter",
+                f"label={PROJECT_LABEL}",
+                "--format",
+                _STATUS_FORMAT,
+            ],
+            timeout=20,
+        )
+        observed = parse_ps_output(output)
+        return {project: observed.get(project, []) for project in wanted}
+
     # --- Internals --------------------------------------------------------------
 
     @staticmethod
@@ -98,6 +134,32 @@ class DockerComposeEngine:
             if key in os.environ:
                 env[key] = os.environ[key]
         return env
+
+    async def _capture(self, args: list[str], *, timeout: float) -> str:  # noqa: ASYNC109
+        """Run a read-only docker command and return its (size-capped) standard output."""
+        process = await asyncio.create_subprocess_exec(
+            self._docker,
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=self._environment(),
+        )
+        try:
+            async with asyncio.timeout(timeout):
+                stdout, stderr = await process.communicate()
+        except TimeoutError:
+            raise EngineError(f"`{_describe(args)}` timed out after {int(timeout)}s") from None
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+        if process.returncode != 0:
+            logger.warning(
+                "%s failed: %s", _describe(args), stderr.decode("utf-8", "replace")[:500]
+            )
+            raise EngineError(f"`{_describe(args)}` failed (exit code {process.returncode})")
+        return stdout[:_MAX_CAPTURE].decode("utf-8", "replace")
 
     async def _run(self, args: list[str], log: LogSink, *, timeout: float) -> None:  # noqa: ASYNC109
         process = await asyncio.create_subprocess_exec(
@@ -127,10 +189,32 @@ class DockerComposeEngine:
             raise EngineError(f"`{_describe(args)}` failed (exit code {code})")
 
 
-_VERBS = ("pull", "up", "down", "connect", "disconnect")
+def parse_ps_output(output: str) -> dict[str, list[ServiceStatus]]:
+    """Parse `docker ps --format _STATUS_FORMAT`. Labels are data: anything that is not
+    EnvCrafter-shaped is dropped instead of trusted."""
+    result: dict[str, list[ServiceStatus]] = {}
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if len(parts) != 4:
+            continue
+        project, service, state, health = parts
+        if not (_PROJECT_RE.match(project) and _SERVICE_RE.match(service) and state.isalpha()):
+            continue
+        result.setdefault(project, []).append(
+            ServiceStatus(
+                service=service,
+                state=state.lower(),
+                health=health if health in _HEALTH_VALUES else None,
+            )
+        )
+    return result
+
+
+_VERBS = ("pull", "up", "down", "stop", "logs", "ps", "connect", "disconnect", "inspect")
 
 
 def _describe(args: list[str]) -> str:
     """Short, path-free command label for user-facing error messages."""
     verb = next((arg for arg in args if arg in _VERBS), args[0])
-    return f"docker {'compose ' if args[0] == 'compose' else 'network '}{verb}"
+    group = {"compose": "compose ", "network": "network "}.get(args[0], "")
+    return f"docker {group}{verb}"

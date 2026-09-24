@@ -6,7 +6,7 @@ a tiny alphabet makes path traversal (`../`), shell metacharacters, and Docker
 name collisions impossible by construction, instead of sanitizing them later.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
@@ -17,6 +17,11 @@ ProjectName = Annotated[str, StringConstraints(pattern=PROJECT_NAME_PATTERN)]
 # Template ids double as folder names under templates/<category>/<id>/.
 TEMPLATE_ID_PATTERN = r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
 TemplateId = Annotated[str, StringConstraints(pattern=TEMPLATE_ID_PATTERN)]
+
+# Every kind of job the orchestrator runs.
+JobMode = Literal["template", "prompt", "plan", "planning", "removal", "stop", "start", "restart"]
+# Jobs that create an environment: the only ones that roll back on failure.
+DEPLOY_MODES: frozenset[str] = frozenset({"template", "prompt", "plan"})
 
 
 class StrictModel(BaseModel):

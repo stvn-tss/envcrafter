@@ -10,6 +10,7 @@
 import asyncio
 import logging
 import os
+import re
 import secrets
 import shutil
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from app.models.common import PROJECT_NAME_PATTERN
 from app.models.environment import EnvironmentMeta
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,7 @@ COMPOSE_FILE = "compose.yaml"
 ENV_FILE = ".env"
 META_FILE = "meta.json"
 MAX_META_BYTES = 64 * 1024
+_PROJECT_RE = re.compile(PROJECT_NAME_PATTERN)
 
 
 class WorkspaceError(RuntimeError):
@@ -61,6 +64,27 @@ class WorkspaceManager:
 
     def exists(self, project: str) -> bool:
         return self._path_for(project).exists()
+
+    def list_projects(self) -> list[str]:
+        """Blocking. Workspace names that are valid project slugs and hold a compose file."""
+        if not self._root.is_dir():
+            return []
+        return sorted(
+            entry.name
+            for entry in self._root.iterdir()
+            if _PROJECT_RE.match(entry.name)
+            and not entry.is_symlink()
+            and (entry / COMPOSE_FILE).is_file()
+        )
+
+    def read_compose(self, project: str) -> dict[str, Any]:
+        """Blocking. The rendered compose document of a workspace (our own output: it may
+        contain YAML anchors emitted by safe_dump, so the strict loader is not used)."""
+        text = (self._path_for(project) / COMPOSE_FILE).read_text(encoding="utf-8")
+        document = yaml.safe_load(text)
+        if not isinstance(document, dict):
+            raise WorkspaceError("the workspace compose file is not a mapping")
+        return document
 
     async def create(
         self,

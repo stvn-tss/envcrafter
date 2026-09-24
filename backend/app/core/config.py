@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     event_history_size: int = 2000
     subscriber_queue_size: int = 500
     job_retention_seconds: float = 3600.0
+    # One `docker ps` serves every dashboard poll during this window.
+    inventory_cache_seconds: float = 2.0
 
     # Delay between simulated engine actions.
     simulated_step_delay: float = 0.4

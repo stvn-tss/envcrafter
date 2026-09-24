@@ -1,4 +1,4 @@
-"""REST endpoints: health, template catalog, deployment jobs and environment removal."""
+"""REST endpoints: health, template catalog, deployment jobs and the environment inventory."""
 
 from typing import Annotated
 from uuid import UUID
@@ -6,11 +6,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Response, status
 
 from app import __version__
-from app.api.deps import CatalogDep, OrchestratorDep, SettingsDep
+from app.api.deps import CatalogDep, InventoryDep, OrchestratorDep, SettingsDep
 from app.core.security import require_trusted_json_request, require_trusted_origin
 from app.models.capabilities import CapabilitiesResponse
 from app.models.common import PROJECT_NAME_PATTERN, TEMPLATE_ID_PATTERN
-from app.models.deployment import DeploymentRequest, JobSummary
+from app.models.deployment import DeploymentRequest, JobListResponse, JobSummary
+from app.models.environment import EnvironmentListResponse, EnvironmentView
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
 from app.services.orchestrator import (
     Job,
@@ -18,6 +19,7 @@ from app.services.orchestrator import (
     TranslatorUnavailableError,
     UnknownEnvironmentError,
     UnknownTemplateError,
+    job_events_url,
 )
 
 router = APIRouter(prefix="/api")
@@ -32,7 +34,7 @@ def _summary(job: Job) -> JobSummary:
         created_at=job.created_at,
         url=job.url,
         urls=job.urls,
-        events_url=f"/ws/jobs/{job.id}",
+        events_url=job_events_url(job.id),
     )
 
 
@@ -111,12 +113,35 @@ async def create_job(payload: DeploymentRequest, orchestrator: OrchestratorDep) 
     return _summary(job)
 
 
+@router.get("/jobs")
+async def list_jobs(orchestrator: OrchestratorDep, active: bool = False) -> JobListResponse:
+    """Retained jobs, newest first; `?active=true` keeps the queued and running ones."""
+    return JobListResponse(
+        jobs=[_summary(job) for job in orchestrator.list_jobs(active_only=active)]
+    )
+
+
 @router.get("/jobs/{job_id}")
 async def get_job(job_id: UUID, orchestrator: OrchestratorDep) -> JobSummary:
     job = orchestrator.get(job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown job")
     return _summary(job)
+
+
+@router.get("/environments")
+async def list_environments(inventory: InventoryDep) -> EnvironmentListResponse:
+    return EnvironmentListResponse(environments=await inventory.list())
+
+
+@router.get("/environments/{project}")
+async def get_environment(
+    project: Annotated[str, Path(pattern=PROJECT_NAME_PATTERN)], inventory: InventoryDep
+) -> EnvironmentView:
+    view = await inventory.get(project)
+    if view is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")
+    return view
 
 
 @router.delete(

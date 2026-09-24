@@ -16,6 +16,7 @@ from app.models.template import ExposedPort
 
 MANAGED_LABEL = "envcrafter.managed"
 PROJECT_LABEL = "envcrafter.project"
+SERVICE_LABEL = "envcrafter.service"
 
 
 def compose_project_name(project: str) -> str:
@@ -57,7 +58,7 @@ def render_compose(blueprint: StackBlueprint, *, project: str, domain: str) -> d
         rendered["labels"] = {
             **(service.labels or {}),
             **base_labels,
-            "envcrafter.service": name,
+            SERVICE_LABEL: name,
             **(_traefik_labels(project, exposed[name], hostnames[name]) if name in exposed else {}),
         }
         services[name] = rendered

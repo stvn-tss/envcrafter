@@ -11,7 +11,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, RootModel, StringConstraints, field_validator
 
-from app.models.common import ProjectName, StrictModel, TemplateId
+from app.models.common import JobMode, ProjectName, StrictModel, TemplateId
 from app.models.environment import WebEndpoint
 
 # --- Requests -----------------------------------------------------------------
@@ -124,9 +124,13 @@ class JobEvent(BaseModel):
 class JobSummary(BaseModel):
     job_id: UUID
     status: JobStatus
-    mode: Literal["template", "prompt", "removal"]
+    mode: JobMode
     project_name: str
     created_at: datetime
     url: str | None
     urls: list[WebEndpoint] = Field(default_factory=list)
     events_url: str
+
+
+class JobListResponse(BaseModel):
+    jobs: list[JobSummary]  # newest first

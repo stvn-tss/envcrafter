@@ -28,6 +28,7 @@ def settings(tmp_path: Path) -> Settings:
         allowed_hosts=["testserver"],
         workspaces_dir=tmp_path / "workspaces",
         llm_api_key=None,
+        inventory_cache_seconds=0,
     )
 
 
