@@ -36,7 +36,10 @@ class Engine(Protocol):
         """Create networks, volumes and containers without starting them."""
 
     async def start(self, stack: StackHandle, log: LogSink) -> None:
-        """Start containers and wait until they are running/healthy."""
+        """Ensure the reverse proxy is attached, start containers and wait until healthy."""
+
+    async def stop(self, stack: StackHandle, log: LogSink) -> None:
+        """Stop the containers, keeping them, their networks and volumes."""
 
     async def remove(self, stack: StackHandle, log: LogSink) -> None:
         """Remove containers, networks and volumes of the project."""

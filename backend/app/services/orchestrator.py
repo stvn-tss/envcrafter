@@ -26,10 +26,11 @@ from uuid import UUID, uuid4
 
 from app.core.config import Settings
 from app.engine.base import Engine, EngineError, StackHandle
-from app.models.common import JobMode
+from app.models.common import DEPLOY_MODES, JobMode
 from app.models.deployment import (
     EventType,
     JobStatus,
+    LifecycleAction,
     PlanStep,
     PromptDeploymentRequest,
     TemplateDeploymentRequest,
@@ -252,6 +253,24 @@ class Orchestrator:
             ],
         )
 
+    async def submit_lifecycle(self, project: str, action: LifecycleAction) -> Job:
+        job = Job(id=uuid4(), mode=action, project_name=project)
+        await self._reserve(job, must_exist=True)
+        stop_step = (
+            PlanStep(key="container_stop", label="Container shutdown"),
+            self._stop_existing,
+        )
+        start_step = (
+            PlanStep(key="container_start", label="Container startup"),
+            self._start_existing,
+        )
+        plans: dict[LifecycleAction, Plan] = {
+            "stop": [stop_step],
+            "start": [start_step],
+            "restart": [stop_step, start_step],
+        }
+        return self._launch(job, plans[action])
+
     async def shutdown(self) -> None:
         for task in self._tasks:
             task.cancel()
@@ -290,8 +309,7 @@ class Orchestrator:
         self._bus.publish(
             job.id,
             EventType.JOB_ACCEPTED,
-            f"{'Removal' if job.mode == 'removal' else 'Deployment'} of "
-            f"'{job.project_name}' accepted ({job.mode})",
+            _accepted_message(job),
             plan=[step for step, _ in plan],
         )
 
@@ -316,12 +334,10 @@ class Orchestrator:
             await self._fail(job, ctx, "Unexpected error. See server logs for details.")
         else:
             job.status = JobStatus.SUCCEEDED
-            done = "removed" if job.mode == "removal" else "ready"
             self._bus.publish(
                 job.id,
                 EventType.JOB_SUCCEEDED,
-                f"Environment '{job.project_name}' is {done}"
-                + (f" at {job.url}" if job.url else ""),
+                _success_message(job),
                 url=job.url,
                 urls=job.urls or None,
             )
@@ -333,7 +349,8 @@ class Orchestrator:
 
     async def _fail(self, job: Job, ctx: StepContext | None, message: str) -> None:
         job.status = JobStatus.FAILED
-        if ctx is not None and job.stack is not None and job.mode != "removal":
+        # Only a deployment rolls back: a failed stop or start never deletes an environment.
+        if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
             await self._rollback(job.stack, ctx)
         self._publish_failure(job, ctx, message)
 
@@ -558,6 +575,19 @@ class Orchestrator:
         stack, _ = await self._existing_stack(ctx.job.project_name)
         await self._engine.remove(stack, ctx.log)
 
+    async def _stop_existing(self, ctx: StepContext) -> None:
+        stack, _ = await self._existing_stack(ctx.job.project_name)
+        await self._engine.stop(stack, ctx.log)
+
+    async def _start_existing(self, ctx: StepContext) -> None:
+        project = ctx.job.project_name
+        stack, _ = await self._existing_stack(project)
+        await self._engine.start(stack, ctx.log)
+        meta = await asyncio.to_thread(self._workspaces.read_meta, project)
+        if meta is not None and meta.urls:
+            ctx.job.urls = list(meta.urls)
+            ctx.job.url = meta.urls[0].url
+
     async def _remove_workspace(self, ctx: StepContext) -> None:
         await self._workspaces.remove(ctx.job.project_name)
         ctx.log(f"Workspace '{ctx.job.project_name}' deleted, including its secrets")
@@ -567,3 +597,23 @@ class Orchestrator:
         if ctx.job.stack is None:
             raise RuntimeError("engine step without a workspace")
         return ctx.job.stack
+
+
+def _accepted_message(job: Job) -> str:
+    project = job.project_name
+    if job.mode in DEPLOY_MODES:
+        return f"Deployment of '{project}' accepted ({job.mode})"
+    verbs = {"removal": "Removal", "stop": "Stop", "start": "Start", "restart": "Restart"}
+    return f"{verbs[job.mode]} of '{project}' accepted"
+
+
+def _success_message(job: Job) -> str:
+    project = job.project_name
+    at = f" at {job.url}" if job.url else ""
+    if job.mode in DEPLOY_MODES:
+        return f"Environment '{project}' is ready{at}"
+    if job.mode == "removal":
+        return f"Environment '{project}' is removed"
+    if job.mode == "stop":
+        return f"Environment '{project}' is stopped"
+    return f"Environment '{project}' is running{at}"

@@ -71,6 +71,15 @@ class DeploymentRequest(
     whichever model happens to match."""
 
 
+LifecycleAction = Literal["stop", "start", "restart"]
+
+
+class LifecycleRequest(StrictModel):
+    """Body of POST /api/environments/{project}/actions."""
+
+    action: LifecycleAction
+
+
 # --- Jobs & events ------------------------------------------------------------
 
 

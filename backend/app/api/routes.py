@@ -10,7 +10,7 @@ from app.api.deps import CatalogDep, InventoryDep, OrchestratorDep, SettingsDep
 from app.core.security import require_trusted_json_request, require_trusted_origin
 from app.models.capabilities import CapabilitiesResponse
 from app.models.common import PROJECT_NAME_PATTERN, TEMPLATE_ID_PATTERN
-from app.models.deployment import DeploymentRequest, JobListResponse, JobSummary
+from app.models.deployment import DeploymentRequest, JobListResponse, JobSummary, LifecycleRequest
 from app.models.environment import EnvironmentListResponse, EnvironmentView
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
 from app.services.orchestrator import (
@@ -142,6 +142,28 @@ async def get_environment(
     if view is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")
     return view
+
+
+@router.post(
+    "/environments/{project}/actions",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_trusted_json_request)],
+)
+async def run_environment_action(
+    project: Annotated[str, Path(pattern=PROJECT_NAME_PATTERN)],
+    payload: LifecycleRequest,
+    orchestrator: OrchestratorDep,
+) -> JobSummary:
+    """Stop, start or restart an environment; progress is streamed on `events_url`."""
+    try:
+        job = await orchestrator.submit_lifecycle(project, payload.action)
+    except UnknownEnvironmentError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment") from None
+    except ProjectNameConflictError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A job is already running for this environment"
+        ) from None
+    return _summary(job)
 
 
 @router.delete(

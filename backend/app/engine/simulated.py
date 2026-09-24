@@ -29,11 +29,19 @@ class SimulatedEngine:
         await asyncio.sleep(self._delay)
 
     async def start(self, stack: StackHandle, log: LogSink) -> None:
+        self._stopped.discard(stack.compose_project)
         for service in await self._images(stack):
             log(f"[simulated] container {stack.compose_project}-{service}-1 started")
             await asyncio.sleep(self._delay)
 
+    async def stop(self, stack: StackHandle, log: LogSink) -> None:
+        self._stopped.add(stack.compose_project)
+        for service in await self._images(stack):
+            log(f"[simulated] container {stack.compose_project}-{service}-1 stopped")
+            await asyncio.sleep(self._delay)
+
     async def remove(self, stack: StackHandle, log: LogSink) -> None:
+        self._stopped.discard(stack.compose_project)
         log(f"[simulated] project {stack.compose_project} removed")
         await asyncio.sleep(self._delay)
 

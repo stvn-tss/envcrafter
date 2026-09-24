@@ -45,12 +45,14 @@ class DockerComposeEngine:
         traefik_container: str,
         pull_timeout: float,
         start_timeout: int,
+        stop_timeout: int,
     ) -> None:
         self._docker = docker_binary
         self._docker_host = docker_host
         self._traefik = traefik_container
         self._pull_timeout = pull_timeout
         self._start_timeout = start_timeout
+        self._stop_timeout = stop_timeout
 
     async def pull(self, stack: StackHandle, log: LogSink) -> None:
         await self._run(self._compose(stack, "pull"), log, timeout=self._pull_timeout)
@@ -66,6 +68,8 @@ class DockerComposeEngine:
             log(f"Reverse proxy attached to {stack.edge_network}")
 
     async def start(self, stack: StackHandle, log: LogSink) -> None:
+        if stack.edge_network:
+            await self._ensure_routing(stack.edge_network, log)
         await self._run(
             self._compose(
                 stack, "up", "--detach", "--wait", "--wait-timeout", str(self._start_timeout)
@@ -73,6 +77,25 @@ class DockerComposeEngine:
             log,
             timeout=self._start_timeout + 60,
         )
+
+    async def stop(self, stack: StackHandle, log: LogSink) -> None:
+        await self._run(
+            self._compose(stack, "stop", "--timeout", str(self._stop_timeout)),
+            log,
+            timeout=self._stop_timeout + 120,
+        )
+
+    async def _ensure_routing(self, network: str, log: LogSink) -> None:
+        """Re-attach Traefik to a project's edge network if it lost it (for instance
+        after the control plane recreated the Traefik container)."""
+        members = await self._capture(
+            ["network", "inspect", network, "--format", "{{range .Containers}}{{.Name}} {{end}}"],
+            timeout=30,
+        )
+        if self._traefik in members.split():
+            return
+        await self._run(["network", "connect", network, self._traefik], log, timeout=30)
+        log(f"Reverse proxy attached to {network}")
 
     async def remove(self, stack: StackHandle, log: LogSink) -> None:
         if stack.edge_network:

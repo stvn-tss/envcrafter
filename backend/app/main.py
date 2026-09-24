@@ -69,6 +69,7 @@ def build_engine(settings: Settings) -> Engine:
         traefik_container=settings.traefik_container,
         pull_timeout=settings.pull_timeout_seconds,
         start_timeout=settings.start_timeout_seconds,
+        stop_timeout=settings.stop_timeout_seconds,
     )
 
 
