@@ -15,6 +15,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[3]
 APP_DIR = Path(__file__).resolve().parents[1]
 
+LLMEffort = Literal["low", "medium", "high", "xhigh", "max"]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -54,7 +56,10 @@ class Settings(BaseSettings):
 
     # Only used for natural-language requests. Without a key, prompt mode is off.
     llm_api_key: SecretStr | None = None
-    llm_model: str = "claude-opus-5"
+    llm_model: str = "claude-opus-5-5"
+    # Opus 5.5 thinks at "medium" effort unless told otherwise. A deployment plan
+    # is intelligence-sensitive, so EnvCrafter asks for "high" explicitly.
+    llm_effort: LLMEffort = "high"
     llm_timeout_seconds: float = 180.0
 
     # Real-time channel sizing (see services/event_bus.py).

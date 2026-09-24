@@ -31,7 +31,8 @@ def _translator(allowlist: ImageAllowlist, response: Any) -> tuple[LLMTranslator
     client = SimpleNamespace(beta=SimpleNamespace(messages=messages))
     translator = LLMTranslator(
         api_key=SecretStr("test"),
-        model="claude-opus-5",
+        model="claude-opus-5-5",
+        effort="high",
         timeout=10,
         catalog=TemplateCatalog.load(Settings().templates_dir, allowlist),
         allowlist=allowlist,
@@ -60,6 +61,9 @@ async def test_valid_plan_is_parsed_and_request_is_constrained(allowlist: ImageA
     assert call["messages"][0]["content"].startswith("<request>")
     schema = call["output_config"]["format"]["schema"]
     assert "docker.io/library/mariadb:11.4.13" in str(schema)
+    assert call["model"] == "claude-opus-5-5"
+    # Opus 5.5 would think at "medium" by default: the effort is always explicit.
+    assert call["output_config"]["effort"] == "high"
 
 
 @pytest.mark.parametrize(

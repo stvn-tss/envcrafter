@@ -5,8 +5,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 
+from app import __version__
 from app.api.deps import CatalogDep, OrchestratorDep, SettingsDep
 from app.core.security import require_trusted_json_request, require_trusted_origin
+from app.models.capabilities import CapabilitiesResponse
 from app.models.common import PROJECT_NAME_PATTERN
 from app.models.deployment import DeploymentRequest, JobSummary
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
@@ -36,6 +38,18 @@ def _summary(job: Job) -> JobSummary:
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.get("/config")
+async def get_config(settings: SettingsDep, orchestrator: OrchestratorDep) -> CapabilitiesResponse:
+    """What the UI needs to adapt itself (simulated banner, prompt availability, rules)."""
+    return CapabilitiesResponse(
+        version=__version__,
+        engine=settings.engine,
+        llm_available=orchestrator.has_translator,
+        public_domain=settings.public_domain,
+        project_name_pattern=PROJECT_NAME_PATTERN,
+    )
 
 
 @router.get("/templates")

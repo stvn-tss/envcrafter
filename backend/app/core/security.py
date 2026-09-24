@@ -3,6 +3,8 @@
 from collections.abc import Sequence
 
 from fastapi import HTTPException, Request, status
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
 
@@ -39,3 +41,35 @@ async def require_trusted_json_request(request: Request) -> None:
         raise HTTPException(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Content-Type must be application/json"
         )
+
+
+_SECURITY_HEADERS = {
+    # Browsers must not guess a script or HTML type from content.
+    "X-Content-Type-Options": "nosniff",
+    # No framing: a hostile page cannot overlay the Stop / Remove buttons (clickjacking).
+    "X-Frame-Options": "DENY",
+    # Environment addresses never leak through the Referer header.
+    "Referrer-Policy": "no-referrer",
+}
+
+
+class SecurityHeadersMiddleware:
+    """Adds baseline hardening headers to every HTTP response (pure ASGI)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in _SECURITY_HEADERS.items():
+                    if name not in headers:
+                        headers[name] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)

@@ -15,6 +15,7 @@ from typing import Protocol
 import anthropic
 from pydantic import SecretStr
 
+from app.core.config import LLMEffort
 from app.policy.images import ImageAllowlist
 from app.services.template_catalog import TemplateCatalog
 from app.translator.spec import StackSpec, build_spec_model
@@ -76,6 +77,7 @@ class LLMTranslator:
         *,
         api_key: SecretStr,
         model: str,
+        effort: LLMEffort,
         timeout: float,
         catalog: TemplateCatalog,
         allowlist: ImageAllowlist,
@@ -85,6 +87,7 @@ class LLMTranslator:
             api_key=api_key.get_secret_value(), timeout=timeout, max_retries=2
         )
         self._model = model
+        self._effort = effort
         templates = catalog.all()
         images = allowlist.all()
         self._output_model = build_spec_model(
@@ -131,7 +134,10 @@ class LLMTranslator:
                 max_tokens=16000,
                 system=self._system,
                 messages=[{"role": "user", "content": f"<request>\n{prompt}\n</request>"}],
-                output_config={"format": {"type": "json_schema", "schema": self._output_schema}},
+                output_config={
+                    "effort": self._effort,
+                    "format": {"type": "json_schema", "schema": self._output_schema},
+                },
                 cache_control={"type": "ephemeral"},
                 betas=[_FALLBACK_BETA],
                 fallbacks="default",

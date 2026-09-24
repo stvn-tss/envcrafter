@@ -164,6 +164,11 @@ class Orchestrator:
     def get(self, job_id: UUID) -> Job | None:
         return self._jobs.get(job_id)
 
+    @property
+    def has_translator(self) -> bool:
+        """True when natural-language requests can be served."""
+        return self._translator is not None
+
     async def submit(self, request: AnyDeploymentRequest) -> Job:
         """Check business rules, register the job and schedule its pipeline.
 

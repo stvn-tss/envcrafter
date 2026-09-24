@@ -7,6 +7,7 @@ Run from backend/:  uv run uvicorn app.main:app --reload
 import asyncio
 import logging
 import mimetypes
+import os
 import shutil
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -14,10 +15,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
+from starlette.staticfiles import PathLike
+from starlette.types import Scope
 
+from app import __version__
 from app.api.routes import router as api_router
 from app.api.websocket import router as ws_router
 from app.core.config import Settings, get_settings
+from app.core.security import SecurityHeadersMiddleware
 from app.engine.base import Engine
 from app.engine.docker_compose import DockerComposeEngine
 from app.engine.simulated import SimulatedEngine
@@ -29,6 +35,25 @@ from app.translator.client import LLMTranslator, Translator
 from app.workspace.manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Static files that browsers revalidate (ETag / Last-Modified) on every load.
+
+    Without it a browser can keep old ES modules next to new ones after an
+    update, and a mix of versions breaks the UI.
+    """
+
+    def file_response(
+        self,
+        full_path: PathLike,
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def build_engine(settings: Settings) -> Engine:
@@ -69,6 +94,7 @@ def create_app(
             translator = LLMTranslator(
                 api_key=settings.llm_api_key,
                 model=settings.llm_model,
+                effort=settings.llm_effort,
                 timeout=settings.llm_timeout_seconds,
                 catalog=catalog,
                 allowlist=allowlist,
@@ -100,7 +126,7 @@ def create_app(
 
     app = FastAPI(
         title="EnvCrafter",
-        version="0.2.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/api/docs" if is_dev else None,
         redoc_url=None,
@@ -109,6 +135,8 @@ def create_app(
     # Rejects requests whose Host header is not ours: defeats DNS rebinding,
     # where a malicious domain re-resolves to 127.0.0.1 to reach this API.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
+    # Added last = outermost: even a rejected Host gets the headers.
+    app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(api_router)
     app.include_router(ws_router)
@@ -117,7 +145,9 @@ def create_app(
         # Some Windows registries map .js to text/plain, which browsers refuse for ES modules.
         mimetypes.add_type("text/javascript", ".js")
         # Mounted last so that /api and /ws routes take precedence.
-        app.mount("/", StaticFiles(directory=settings.frontend_dir, html=True), name="frontend")
+        app.mount(
+            "/", NoCacheStaticFiles(directory=settings.frontend_dir, html=True), name="frontend"
+        )
     return app
 
 
