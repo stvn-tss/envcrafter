@@ -36,6 +36,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from app.models.deployment import TERMINAL_EVENTS, EventType, JobEvent, PlanStep
+from app.models.environment import WebEndpoint
 
 
 class UnknownJobError(LookupError):
@@ -83,6 +84,7 @@ class JobEventBus:
         step_total: int | None = None,
         plan: list[PlanStep] | None = None,
         url: str | None = None,
+        urls: list[WebEndpoint] | None = None,
     ) -> JobEvent:
         channel = self._channels.get(job_id)
         if channel is None:
@@ -101,6 +103,7 @@ class JobEventBus:
             step_total=step_total,
             plan=plan,
             url=url,
+            urls=urls,
         )
         channel.next_seq += 1
         channel.history.append(event)

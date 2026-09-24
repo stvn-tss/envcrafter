@@ -33,10 +33,11 @@ from app.models.deployment import (
     PromptDeploymentRequest,
     TemplateDeploymentRequest,
 )
+from app.models.environment import EnvironmentMeta, EnvironmentService, WebEndpoint
 from app.models.stack import StackBlueprint
 from app.models.template import SECRET_NAME_PATTERN, ExposedPort
 from app.policy.compose_policy import ComposePolicyError, PolicyContext, validate_compose
-from app.policy.images import ImageAllowlist
+from app.policy.images import ImageAllowlist, ImageRefError, parse_image_ref
 from app.services.event_bus import JobEventBus
 from app.services.template_catalog import Template, TemplateCatalog
 from app.translator.client import Translator, TranslatorError
@@ -88,6 +89,9 @@ class Candidate:
     context: PolicyContext
     expose: tuple[ExposedPort, ...]
     secrets: tuple[str, ...]
+    # Display name per service, shown in the UI and recorded in meta.json.
+    service_names: dict[str, str] = field(default_factory=dict)
+    template_id: str | None = None
 
 
 @dataclass
@@ -100,6 +104,7 @@ class Job:
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     url: str | None = None
+    urls: list[WebEndpoint] = field(default_factory=list)
     # Pipeline state, filled step by step.
     candidate: Candidate | None = None
     blueprint: StackBlueprint | None = None
@@ -297,6 +302,7 @@ class Orchestrator:
                 f"Environment '{job.project_name}' is {done}"
                 + (f" at {job.url}" if job.url else ""),
                 url=job.url,
+                urls=job.urls or None,
             )
         finally:
             # Keep the history for late viewers and reconnects, then free memory.
@@ -334,6 +340,45 @@ class Orchestrator:
         prefix = template.manifest.id[:24].rstrip("-") if template else "env"
         return f"{prefix}-{secrets.token_hex(2)}"
 
+    def _image_title(self, image: str) -> str:
+        """Allow-list title of an image ("MariaDB 11.4 LTS"), or the reference itself."""
+        try:
+            allowed = self._allowlist.find(parse_image_ref(image))
+        except ImageRefError:
+            allowed = None
+        return allowed.title if allowed is not None else image[:60]
+
+    def _endpoints(self, blueprint: StackBlueprint, project: str) -> list[WebEndpoint]:
+        hosts = web_hostnames(blueprint, project, self._settings.public_domain)
+        return [
+            WebEndpoint(
+                service=exposed.service,
+                name=blueprint.service_names.get(exposed.service, exposed.service)[:60],
+                url=f"http://{hosts[exposed.service]}",
+            )
+            for exposed in blueprint.expose
+        ]
+
+    def _meta(self, job: Job, blueprint: StackBlueprint) -> EnvironmentMeta:
+        project = job.project_name
+        return EnvironmentMeta(
+            project=project,
+            title=blueprint.title[:80] or project,
+            origin="template" if job.mode == "template" else "prompt",
+            template_id=blueprint.template_id,
+            created_at=datetime.now(UTC),
+            services=[
+                EnvironmentService(
+                    service=name,
+                    name=blueprint.service_names.get(name, name)[:60],
+                    image=service.image,
+                )
+                for name, service in blueprint.compose.services.items()
+            ],
+            urls=self._endpoints(blueprint, project),
+            volumes=sorted(blueprint.compose.volumes),
+        )
+
     # --- Step handlers ------------------------------------------------------------
 
     async def _load_template(self, ctx: StepContext) -> None:
@@ -353,6 +398,8 @@ class Orchestrator:
             context=template.policy_context(self._allowlist),
             expose=tuple(manifest.expose),
             secrets=tuple(manifest.secrets),
+            service_names={c.service: c.name for c in manifest.components},
+            template_id=manifest.id,
         )
 
     async def _translate(self, ctx: StepContext) -> None:
@@ -391,6 +438,9 @@ class Orchestrator:
             ),
             expose=(expose,) if expose else (),
             secrets=tuple(spec.secrets),
+            service_names={
+                service.name: self._image_title(service.image) for service in spec.services
+            },
         )
 
     async def _validate(self, ctx: StepContext) -> None:
@@ -411,6 +461,8 @@ class Orchestrator:
             compose=compose,
             expose=candidate.expose,
             secrets=candidate.secrets,
+            service_names=dict(candidate.service_names),
+            template_id=candidate.template_id,
         )
         online = [name for name, s in compose.services.items() if "egress" in s.networks]
         ctx.log(
@@ -431,7 +483,9 @@ class Orchestrator:
             "EC_HOSTNAME": web_hostname(project, domain),
             **WorkspaceManager.generate_secrets(blueprint.secrets),
         }
-        workspace = await self._workspaces.create(project, document, variables)
+        workspace = await self._workspaces.create(
+            project, document, variables, self._meta(ctx.job, blueprint)
+        )
         ctx.job.stack = StackHandle(
             project=project,
             compose_project=compose_project_name(project),
@@ -453,10 +507,10 @@ class Orchestrator:
         await self._engine.start(self._stack(ctx), ctx.log)
         blueprint = ctx.job.blueprint
         if blueprint is not None and blueprint.expose:
-            hosts = web_hostnames(blueprint, ctx.job.project_name, self._settings.public_domain)
-            for service, host in hosts.items():
-                ctx.log(f"Web UI of {service}: http://{host}")
-            ctx.job.url = f"http://{hosts[blueprint.expose[0].service]}"
+            ctx.job.urls = self._endpoints(blueprint, ctx.job.project_name)
+            for endpoint in ctx.job.urls:
+                ctx.log(f"Web UI of {endpoint.service}: {endpoint.url}")
+            ctx.job.url = ctx.job.urls[0].url
 
     async def _teardown(self, ctx: StepContext) -> None:
         project = ctx.job.project_name

@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, RootModel, StringConstraints, field_validator
 
 from app.models.common import ProjectName, StrictModel, TemplateId
+from app.models.environment import WebEndpoint
 
 # --- Requests -----------------------------------------------------------------
 
@@ -117,6 +118,7 @@ class JobEvent(BaseModel):
     step_total: int | None = None
     plan: list[PlanStep] | None = None  # only on job.accepted
     url: str | None = None  # only on job.succeeded, when the stack has a web UI
+    urls: list[WebEndpoint] | None = None  # every web UI on job.succeeded, main one first
 
 
 class JobSummary(BaseModel):
@@ -126,4 +128,5 @@ class JobSummary(BaseModel):
     project_name: str
     created_at: datetime
     url: str | None
+    urls: list[WebEndpoint] = Field(default_factory=list)
     events_url: str

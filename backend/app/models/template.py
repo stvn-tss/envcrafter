@@ -26,7 +26,8 @@ CATEGORY_LABELS: dict[TemplateCategory, str] = {
 }
 
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=60)]
-ServiceName = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]{0,39}$")]
+SERVICE_NAME_PATTERN = r"^[a-z][a-z0-9-]{0,39}$"
+ServiceName = Annotated[str, StringConstraints(pattern=SERVICE_NAME_PATTERN)]
 SECRET_NAME_PATTERN = r"^[A-Z][A-Z0-9_]{2,63}$"  # noqa: S105 - a name pattern, not a secret
 SecretName = Annotated[str, StringConstraints(pattern=SECRET_NAME_PATTERN)]
 

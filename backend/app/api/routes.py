@@ -31,6 +31,7 @@ def _summary(job: Job) -> JobSummary:
         project_name=job.project_name,
         created_at=job.created_at,
         url=job.url,
+        urls=job.urls,
         events_url=f"/ws/jobs/{job.id}",
     )
 

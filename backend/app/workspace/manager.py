@@ -8,6 +8,7 @@
 """
 
 import asyncio
+import logging
 import os
 import secrets
 import shutil
@@ -17,8 +18,14 @@ from typing import Any
 
 import yaml
 
+from app.models.environment import EnvironmentMeta
+
+logger = logging.getLogger(__name__)
+
 COMPOSE_FILE = "compose.yaml"
 ENV_FILE = ".env"
+META_FILE = "meta.json"
+MAX_META_BYTES = 64 * 1024
 
 
 class WorkspaceError(RuntimeError):
@@ -56,12 +63,30 @@ class WorkspaceManager:
         return self._path_for(project).exists()
 
     async def create(
-        self, project: str, compose: dict[str, Any], variables: dict[str, str]
+        self,
+        project: str,
+        compose: dict[str, Any],
+        variables: dict[str, str],
+        meta: EnvironmentMeta,
     ) -> Workspace:
-        return await asyncio.to_thread(self._create, project, compose, variables)
+        return await asyncio.to_thread(self._create, project, compose, variables, meta)
 
     async def remove(self, project: str) -> None:
         await asyncio.to_thread(self._remove, project)
+
+    def read_meta(self, project: str) -> EnvironmentMeta | None:
+        """Blocking: call through asyncio.to_thread(). None when absent or unreadable."""
+        path = self._path_for(project) / META_FILE
+        if not path.is_file():
+            return None
+        try:
+            if path.stat().st_size > MAX_META_BYTES:
+                raise ValueError(f"{META_FILE} exceeds {MAX_META_BYTES} bytes")
+            return EnvironmentMeta.model_validate_json(path.read_bytes())
+        except (OSError, ValueError):
+            # The environment is still listed from Docker; details stay server-side.
+            logger.warning("Ignoring unreadable %s of %s", META_FILE, project, exc_info=True)
+            return None
 
     @staticmethod
     def generate_secrets(names: tuple[str, ...]) -> dict[str, str]:
@@ -69,7 +94,11 @@ class WorkspaceManager:
         return {name: secrets.token_urlsafe(24) for name in names}
 
     def _create(
-        self, project: str, compose: dict[str, Any], variables: dict[str, str]
+        self,
+        project: str,
+        compose: dict[str, Any],
+        variables: dict[str, str],
+        meta: EnvironmentMeta,
     ) -> Workspace:
         self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = self._path_for(project)
@@ -80,6 +109,7 @@ class WorkspaceManager:
         env = "".join(f"{key}={value}\n" for key, value in variables.items())
         _write_private(path / COMPOSE_FILE, document)
         _write_private(path / ENV_FILE, env)
+        _write_private(path / META_FILE, meta.model_dump_json(indent=2) + "\n")
         return Workspace(project=project, path=path)
 
     def _remove(self, project: str) -> None:
