@@ -68,8 +68,18 @@ class DockerComposeEngine:
             log(f"Reverse proxy attached to {stack.edge_network}")
 
     async def start(self, stack: StackHandle, log: LogSink) -> None:
+        # The edge network may not exist yet: `docker network inspect` then fails, but
+        # that must not fail the job, since `compose up` below (re)creates the network
+        # (for instance after it was removed by an external `docker compose down`). Only
+        # attach Traefik up front when the network already exists; otherwise attach it
+        # right after `up`, once the network is guaranteed to be there.
+        attached = False
         if stack.edge_network:
-            await self._ensure_routing(stack.edge_network, log)
+            try:
+                await self._ensure_routing(stack.edge_network, log)
+                attached = True
+            except EngineError:
+                log(f"{stack.edge_network} not found yet; `docker compose up` will create it")
         await self._run(
             self._compose(
                 stack, "up", "--detach", "--wait", "--wait-timeout", str(self._start_timeout)
@@ -77,6 +87,8 @@ class DockerComposeEngine:
             log,
             timeout=self._start_timeout + 60,
         )
+        if stack.edge_network and not attached:
+            await self._ensure_routing(stack.edge_network, log)
 
     async def stop(self, stack: StackHandle, log: LogSink) -> None:
         await self._run(

@@ -1,7 +1,10 @@
+from collections.abc import Sequence
+from pathlib import Path
+
 import pytest
 
-from app.engine.base import ServiceStatus
-from app.engine.docker_compose import _describe, parse_ps_output
+from app.engine.base import EngineError, LogSink, ServiceStatus, StackHandle
+from app.engine.docker_compose import DockerComposeEngine, _describe, parse_ps_output
 
 
 def test_ps_output_is_grouped_by_project() -> None:
@@ -42,3 +45,129 @@ def test_command_labels_never_leak_paths() -> None:
     assert _describe(["network", "inspect", "ec-x-edge"]) == "docker network inspect"
     compose = ["compose", "--progress", "plain", "--file", "C:/secret/compose.yaml", "up"]
     assert _describe(compose) == "docker compose up"
+
+
+def _engine() -> DockerComposeEngine:
+    return DockerComposeEngine(
+        docker_binary="docker",
+        docker_host="tcp://socket-proxy-api:2375",
+        traefik_container="envcrafter-traefik",
+        pull_timeout=10,
+        start_timeout=30,
+        stop_timeout=10,
+    )
+
+
+def _stack(tmp_path: Path) -> StackHandle:
+    return StackHandle(
+        project="demo",
+        compose_project="ec-demo",
+        compose_file=tmp_path / "compose.yaml",
+        edge_network="ec-demo-edge",
+    )
+
+
+class _Recorder:
+    """Fake `_capture`/`_run`: records the verb of every attempted command, including one
+    that is about to raise, and plays back canned `_capture` results in call order."""
+
+    def __init__(self, capture_effects: Sequence[str | Exception]) -> None:
+        self.calls: list[str] = []
+        self._capture_effects = list(capture_effects)
+
+    async def capture(self, args: list[str], *, timeout: float) -> str:  # noqa: ASYNC109
+        self.calls.append(_describe(args))
+        effect = self._capture_effects.pop(0)
+        if isinstance(effect, Exception):
+            raise effect
+        return effect
+
+    async def run(self, args: list[str], log: LogSink, *, timeout: float) -> None:  # noqa: ASYNC109
+        self.calls.append(_describe(args))
+
+
+def _wire(
+    engine: DockerComposeEngine, recorder: _Recorder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine, "_capture", recorder.capture)
+    monkeypatch.setattr(engine, "_run", recorder.run)
+
+
+@pytest.mark.anyio
+async def test_start_only_ups_when_the_network_exists_and_traefik_is_attached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine()
+    recorder = _Recorder(["envcrafter-traefik "])  # inspect: Traefik already a member
+    _wire(engine, recorder, monkeypatch)
+
+    await engine.start(_stack(tmp_path), lambda _message: None)
+
+    assert recorder.calls == ["docker network inspect", "docker compose up"]
+
+
+@pytest.mark.anyio
+async def test_start_reattaches_traefik_before_up_when_the_network_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine()
+    recorder = _Recorder([""])  # inspect: network exists, Traefik is not a member
+    _wire(engine, recorder, monkeypatch)
+
+    await engine.start(_stack(tmp_path), lambda _message: None)
+
+    assert recorder.calls == [
+        "docker network inspect",
+        "docker network connect",
+        "docker compose up",
+    ]
+
+
+@pytest.mark.anyio
+async def test_start_tolerates_a_missing_network_and_attaches_traefik_after_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network removed outside EnvCrafter must not fail Start: `compose up` recreates
+    it, and Traefik is attached once the network is guaranteed to exist."""
+    engine = _engine()
+    recorder = _Recorder(
+        [
+            EngineError("`docker network inspect` failed (exit code 1)"),  # pre-check: missing
+            "",  # post-check: network now exists (created by `up`), Traefik not a member yet
+        ]
+    )
+    _wire(engine, recorder, monkeypatch)
+
+    await engine.start(_stack(tmp_path), lambda _message: None)
+
+    assert recorder.calls == [
+        "docker network inspect",
+        "docker compose up",
+        "docker network inspect",
+        "docker network connect",
+    ]
+
+
+@pytest.mark.anyio
+async def test_start_still_raises_when_traefik_cannot_be_attached_after_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A genuine failure of the post-`up` attach (network still unreachable, or the
+    Traefik container itself is gone) must fail the job, unlike the tolerated pre-check."""
+    engine = _engine()
+    recorder = _Recorder(
+        [
+            EngineError("`docker network inspect` failed (exit code 1)"),
+            EngineError("`docker network inspect` failed (exit code 1)"),
+        ]
+    )
+    _wire(engine, recorder, monkeypatch)
+
+    with pytest.raises(EngineError):
+        await engine.start(_stack(tmp_path), lambda _message: None)
+
+    assert recorder.calls == [
+        "docker network inspect",
+        "docker compose up",
+        "docker network inspect",
+    ]
