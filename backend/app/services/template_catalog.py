@@ -5,6 +5,7 @@ compose file, stops the application from starting: a broken or unsafe template
 can never be offered to users.
 """
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,13 +24,25 @@ from app.policy.compose_policy import (
     PolicyContext,
     validate_compose,
 )
-from app.policy.images import ImageAllowlist
+from app.policy.images import ImageAllowlist, parse_image_ref
 from app.policy.yaml_loader import StrictYAMLError, load_yaml
 from app.workspace.renderer import web_hostname
+
+MAX_LOGO_BYTES = 64 * 1024
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 class TemplateCatalogError(ValueError):
     """The catalog on disk is inconsistent; the app refuses to start."""
+
+
+@dataclass(frozen=True)
+class TemplateLogo:
+    """Validated at startup and kept in memory: requests never build a file path."""
+
+    media_type: str
+    data: bytes
+    etag: str
 
 
 @dataclass(frozen=True)
@@ -39,6 +52,8 @@ class Template:
     # on it: templates are trusted, never exempt.
     compose_source: dict[str, Any]
     compose: ComposeSpec
+    vulnerable: bool = False
+    logo: TemplateLogo | None = None
 
     def policy_context(self, allowlist: ImageAllowlist) -> PolicyContext:
         return _policy_context(self.manifest, allowlist)
@@ -74,6 +89,9 @@ class Template:
             needs_internet=self.manifest.needs_internet,
             access_notes=self.manifest.access_notes,
             tags=self.manifest.tags,
+            vulnerable=self.vulnerable,
+            footprint=self.manifest.footprint,
+            logo_url=f"/api/templates/{self.manifest.id}/logo" if self.logo is not None else None,
         )
 
 
@@ -134,7 +152,18 @@ def _load_template(manifest_path: Path, allowlist: ImageAllowlist) -> Template:
         raise TemplateCatalogError(
             f"{manifest.id}: exposed services must be unique compose services"
         )
-    return Template(manifest=manifest, compose_source=compose_source, compose=compose)
+
+    try:
+        logo = _load_logo(template_dir, manifest.logo) if manifest.logo else None
+    except OSError as exc:
+        raise TemplateCatalogError(f"{template_dir}: unreadable logo: {exc}") from None
+    return Template(
+        manifest=manifest,
+        compose_source=compose_source,
+        compose=compose,
+        vulnerable=_is_vulnerable(compose, allowlist),
+        logo=logo,
+    )
 
 
 def _policy_context(manifest: TemplateManifest, allowlist: ImageAllowlist) -> PolicyContext:
@@ -143,3 +172,32 @@ def _policy_context(manifest: TemplateManifest, allowlist: ImageAllowlist) -> Po
         allow_egress=manifest.needs_internet,
         secret_names=frozenset(manifest.secrets),
     )
+
+
+def _is_vulnerable(compose: ComposeSpec, allowlist: ImageAllowlist) -> bool:
+    # Images were parsed successfully by validate_compose() just before.
+    for service in compose.services.values():
+        allowed = allowlist.find(parse_image_ref(service.image))
+        if allowed is not None and allowed.vulnerable:
+            return True
+    return False
+
+
+def _load_logo(template_dir: Path, name: str) -> TemplateLogo:
+    """Blocking. A small, genuine PNG or WebP sitting next to the manifest."""
+    path = template_dir / name
+    if path.is_symlink() or not path.is_file():
+        raise TemplateCatalogError(f"{path}: the logo must be a regular file")
+    if path.resolve().parent != template_dir.resolve():
+        raise TemplateCatalogError(f"{path}: the logo must sit next to the manifest")
+    if path.stat().st_size > MAX_LOGO_BYTES:
+        raise TemplateCatalogError(f"{path}: the logo exceeds {MAX_LOGO_BYTES} bytes")
+    data = path.read_bytes()
+    if name.endswith(".png"):
+        media_type, genuine = "image/png", data.startswith(_PNG_SIGNATURE)
+    else:
+        media_type, genuine = "image/webp", data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    if not genuine or len(data) > MAX_LOGO_BYTES:
+        raise TemplateCatalogError(f"{path}: the logo content does not match its extension")
+    etag = f'"{hashlib.sha256(data).hexdigest()[:32]}"'
+    return TemplateLogo(media_type=media_type, data=data, etag=etag)

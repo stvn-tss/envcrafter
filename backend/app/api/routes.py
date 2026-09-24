@@ -3,13 +3,13 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Response, status
 
 from app import __version__
 from app.api.deps import CatalogDep, OrchestratorDep, SettingsDep
 from app.core.security import require_trusted_json_request, require_trusted_origin
 from app.models.capabilities import CapabilitiesResponse
-from app.models.common import PROJECT_NAME_PATTERN
+from app.models.common import PROJECT_NAME_PATTERN, TEMPLATE_ID_PATTERN
 from app.models.deployment import DeploymentRequest, JobSummary
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
 from app.services.orchestrator import (
@@ -59,6 +59,30 @@ async def list_templates(catalog: CatalogDep, settings: SettingsDep) -> Template
         categories=[CategoryInfo(id=cat, label=label) for cat, label in CATEGORY_LABELS.items()],
         templates=[template.view(settings.public_domain) for template in catalog.all()],
     )
+
+
+@router.get("/templates/{template_id}/logo")
+async def template_logo(
+    template_id: Annotated[str, Path(pattern=TEMPLATE_ID_PATTERN)],
+    catalog: CatalogDep,
+    if_none_match: Annotated[str | None, Header()] = None,
+) -> Response:
+    """Serve a template logo. The id is resolved through the catalog allow-list and the
+    bytes were validated at startup: no path is ever built from the request."""
+    template = catalog.get(template_id)
+    if template is None or template.logo is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No logo for this template")
+    logo = template.logo
+    headers = {
+        "ETag": logo.etag,
+        "Cache-Control": "no-cache",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cross-Origin-Resource-Policy": "same-origin",
+    }
+    if if_none_match == logo.etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    return Response(content=logo.data, media_type=logo.media_type, headers=headers)
 
 
 @router.post(

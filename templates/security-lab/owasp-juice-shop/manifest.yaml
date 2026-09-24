@@ -22,3 +22,7 @@ access_notes:
   - Finding the scoreboard is the first challenge.
   - Data is reset every time the container restarts.
 tags: [owasp, juice, pentest, vulnerable, ctf, web, xss, sqli]
+footprint:
+  download_mb: 114
+  memory_mb: 200
+  first_start_seconds: 30

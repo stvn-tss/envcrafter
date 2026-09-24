@@ -25,3 +25,7 @@ access_notes:
   - "First visit: open Setup / Reset DB and click Create / Reset Database, then log in with admin / password."
   - The default security level is low; change it in DVWA Security.
 tags: [dvwa, owasp, pentest, vulnerable, php, sqli, xss, csrf]
+footprint:
+  download_mb: 318
+  memory_mb: 250
+  first_start_seconds: 45

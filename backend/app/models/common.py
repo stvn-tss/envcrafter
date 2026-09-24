@@ -15,7 +15,8 @@ PROJECT_NAME_PATTERN = r"^[a-z][a-z0-9-]{1,30}[a-z0-9]$"
 ProjectName = Annotated[str, StringConstraints(pattern=PROJECT_NAME_PATTERN)]
 
 # Template ids double as folder names under templates/<category>/<id>/.
-TemplateId = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$")]
+TEMPLATE_ID_PATTERN = r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
+TemplateId = Annotated[str, StringConstraints(pattern=TEMPLATE_ID_PATTERN)]
 
 
 class StrictModel(BaseModel):

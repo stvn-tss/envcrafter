@@ -20,3 +20,7 @@ access_notes:
   - The first visit asks you to create the root (admin) account.
   - Create libraries pointing to /audiobooks and /podcasts, then upload from the web UI.
 tags: [media, multimedia, audiobook, podcast, audio, books, streaming]
+footprint:
+  download_mb: 115
+  memory_mb: 150
+  first_start_seconds: 20

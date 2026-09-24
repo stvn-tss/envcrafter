@@ -23,3 +23,7 @@ access_notes:
   - "Default accounts: glpi/glpi (super-admin), tech/tech, normal/normal, post-only/postonly. Change these passwords after the first login."
   - Database credentials are random and stored only in the project's workspace .env file.
 tags: [itsm, glpi, helpdesk, servicedesk, ticketing, inventory, cmdb, asset]
+footprint:
+  download_mb: 454
+  memory_mb: 350
+  first_start_seconds: 120

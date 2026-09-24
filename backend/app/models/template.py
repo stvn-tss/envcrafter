@@ -45,6 +45,17 @@ class ExposedPort(StrictModel):
     port: Annotated[int, Field(ge=1, le=65535)]
 
 
+LOGO_FILE_PATTERN = r"^logo\.(png|webp)$"
+
+
+class TemplateFootprint(StrictModel):
+    """Approximate weight of a template on linux/amd64 (see README, "Adding a template")."""
+
+    download_mb: Annotated[int, Field(ge=1, le=100_000)]  # compressed images
+    memory_mb: Annotated[int, Field(ge=1, le=100_000)]  # steady-state RAM of the stack
+    first_start_seconds: Annotated[int, Field(ge=1, le=3600)]  # started -> healthy, cached images
+
+
 class TemplateManifest(StrictModel):
     id: TemplateId
     name: ShortText
@@ -62,6 +73,10 @@ class TemplateManifest(StrictModel):
         default_factory=list
     )
     tags: list[ShortText] = Field(default_factory=list)
+    footprint: TemplateFootprint
+    # Optional application logo next to the manifest. PNG or WebP only: an SVG is a
+    # document that can carry scripts.
+    logo: Annotated[str, StringConstraints(pattern=LOGO_FILE_PATTERN)] | None = None
 
 
 # --- API views ------------------------------------------------------------------
@@ -87,6 +102,9 @@ class TemplateView(BaseModel):
     needs_internet: bool
     access_notes: list[str]
     tags: list[str]
+    vulnerable: bool  # at least one image is flagged `vulnerable` in the allow-list
+    footprint: TemplateFootprint
+    logo_url: str | None
 
 
 class CategoryInfo(BaseModel):
