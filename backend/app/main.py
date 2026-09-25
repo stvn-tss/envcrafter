@@ -32,6 +32,7 @@ from app.services.event_bus import JobEventBus
 from app.services.inventory import EnvironmentInventory
 from app.services.log_streams import LogStreamer
 from app.services.orchestrator import Orchestrator
+from app.services.plan_store import PlanStore
 from app.services.template_catalog import TemplateCatalog
 from app.translator.client import LLMTranslator, Translator
 from app.workspace.manager import WorkspaceManager
@@ -110,6 +111,7 @@ def create_app(
         )
         workspaces = WorkspaceManager(settings.workspaces_dir)
         engine = build_engine(settings)
+        plans = PlanStore(ttl_seconds=settings.plan_ttl_seconds, max_plans=settings.max_plans)
         orchestrator = Orchestrator(
             bus=bus,
             catalog=catalog,
@@ -118,6 +120,7 @@ def create_app(
             engine=engine,
             translator=translator,
             settings=settings,
+            plans=plans,
         )
 
         app.state.settings = settings

@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, RootModel, StringConstraints, field_validator
+from pydantic import AfterValidator, BaseModel, Field, RootModel, StringConstraints
 
 from app.models.common import JobMode, ProjectName, StrictModel, TemplateId
 from app.models.environment import WebEndpoint
@@ -34,6 +34,21 @@ _FORBIDDEN_CODEPOINTS = frozenset(
 )
 
 
+def _reject_invisible_characters(value: str) -> str:
+    if any(ord(char) in _FORBIDDEN_CODEPOINTS for char in value):
+        raise ValueError("prompt contains control or bidirectional override characters")
+    return value
+
+
+# Untrusted free text that will reach the LLM. Validating it does NOT make the LLM
+# output trustworthy: that output goes through its own schema + policy validation.
+Prompt = Annotated[
+    str,
+    StringConstraints(min_length=3, max_length=2000),
+    AfterValidator(_reject_invisible_characters),
+]
+
+
 class TemplateDeploymentRequest(StrictModel):
     mode: Literal["template"]
     # Only a syntactic check here. The id is then looked up in the catalog
@@ -47,21 +62,28 @@ class PromptDeploymentRequest(StrictModel):
     # The prompt is untrusted free text that will reach the LLM. Validating it
     # does NOT make the LLM output trustworthy: that output goes through its
     # own schema + policy validation before anything is written or executed.
-    prompt: Annotated[str, StringConstraints(min_length=3, max_length=2000)]
+    prompt: Prompt
     project_name: ProjectName | None = None
 
-    @field_validator("prompt")
-    @classmethod
-    def reject_invisible_characters(cls, value: str) -> str:
-        if any(ord(char) in _FORBIDDEN_CODEPOINTS for char in value):
-            raise ValueError("prompt contains control or bidirectional override characters")
-        return value
+
+class PlanRequest(StrictModel):
+    """POST /api/plans: analyse a request into a reviewable plan; nothing is deployed."""
+
+    prompt: Prompt
+
+
+class PlanDeploymentRequest(StrictModel):
+    """Deploy a plan the user reviewed. Only its id travels: the stack stays server-side."""
+
+    mode: Literal["plan"]
+    plan_id: UUID
+    project_name: ProjectName | None = None
 
 
 class DeploymentRequest(
     RootModel[
         Annotated[
-            TemplateDeploymentRequest | PromptDeploymentRequest,
+            TemplateDeploymentRequest | PromptDeploymentRequest | PlanDeploymentRequest,
             Field(discriminator="mode"),
         ]
     ]
@@ -131,16 +153,18 @@ class JobEvent(BaseModel):
     urls: list[WebEndpoint] | None = None  # every web UI on job.succeeded, main one first
     # Only on step.progress: 0-100, or None when the progress cannot be measured.
     percent: Annotated[int, Field(ge=0, le=100)] | None = None
+    plan_id: UUID | None = None  # only on job.succeeded of planning jobs
 
 
 class JobSummary(BaseModel):
     job_id: UUID
     status: JobStatus
     mode: JobMode
-    project_name: str
+    project_name: str | None  # None for "planning"
     created_at: datetime
     url: str | None
     urls: list[WebEndpoint] = Field(default_factory=list)
+    plan_id: UUID | None = None  # set by a succeeded "planning" job
     events_url: str
 
 

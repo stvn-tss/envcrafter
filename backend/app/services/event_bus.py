@@ -94,6 +94,7 @@ class JobEventBus:
         url: str | None = None,
         urls: list[WebEndpoint] | None = None,
         percent: int | None = None,
+        plan_id: UUID | None = None,
     ) -> JobEvent:
         channel = self._channels.get(job_id)
         if channel is None:
@@ -114,6 +115,7 @@ class JobEventBus:
             url=url,
             urls=urls,
             percent=percent,
+            plan_id=plan_id,
         )
         channel.next_seq += 1
         if event_type == EventType.STEP_PROGRESS:

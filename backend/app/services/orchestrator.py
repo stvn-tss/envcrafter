@@ -15,14 +15,14 @@ networks, volumes and workspace), so no half-deployed stack is left behind.
 """
 
 import asyncio
+import copy
 import logging
 import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID, uuid4
 
 from app.core.config import Settings
@@ -32,19 +32,23 @@ from app.models.deployment import (
     EventType,
     JobStatus,
     LifecycleAction,
+    PlanDeploymentRequest,
+    PlanRequest,
     PlanStep,
     PromptDeploymentRequest,
     TemplateDeploymentRequest,
 )
 from app.models.environment import EnvironmentMeta, EnvironmentService, WebEndpoint
-from app.models.stack import StackBlueprint
-from app.models.template import SECRET_NAME_PATTERN, ExposedPort
+from app.models.plan import PlanServiceView, PlanView
+from app.models.stack import Candidate, StackBlueprint
+from app.models.template import SECRET_NAME_PATTERN
 from app.policy.compose_policy import ComposePolicyError, PolicyContext, validate_compose
 from app.policy.images import ImageAllowlist, ImageRefError, parse_image_ref
 from app.services.event_bus import JobEventBus
+from app.services.plan_store import PlanStore, StoredPlan
 from app.services.template_catalog import Template, TemplateCatalog
 from app.translator.client import Translator, TranslatorError
-from app.translator.spec import SpecConversionError, spec_to_compose_source
+from app.translator.spec import SpecConversionError, StackSpec, spec_to_compose_source
 from app.workspace.manager import WorkspaceManager
 from app.workspace.renderer import (
     compose_project_name,
@@ -56,7 +60,7 @@ from app.workspace.renderer import (
 
 logger = logging.getLogger(__name__)
 
-AnyDeploymentRequest = TemplateDeploymentRequest | PromptDeploymentRequest
+AnyDeploymentRequest = TemplateDeploymentRequest | PromptDeploymentRequest | PlanDeploymentRequest
 
 _ACTIVE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING})
 _SECRET_NAME_RE = re.compile(SECRET_NAME_PATTERN)
@@ -67,6 +71,10 @@ def job_events_url(job_id: UUID) -> str:
 
 
 class UnknownTemplateError(LookupError):
+    pass
+
+
+class UnknownPlanError(LookupError):
     pass
 
 
@@ -87,24 +95,10 @@ class StepFailedError(Exception):
 
 
 @dataclass
-class Candidate:
-    """A stack proposal (from a template or the LLM) that is NOT validated yet."""
-
-    title: str
-    source: dict[str, Any]
-    context: PolicyContext
-    expose: tuple[ExposedPort, ...]
-    secrets: tuple[str, ...]
-    # Display name per service, shown in the UI and recorded in meta.json.
-    service_names: dict[str, str] = field(default_factory=dict)
-    template_id: str | None = None
-
-
-@dataclass
 class Job:
     id: UUID
     mode: JobMode
-    project_name: str
+    project_name: str | None
     request: AnyDeploymentRequest | None = None
     template: Template | None = None
     status: JobStatus = JobStatus.QUEUED
@@ -112,6 +106,9 @@ class Job:
     url: str | None = None
     urls: list[WebEndpoint] = field(default_factory=list)
     # Pipeline state, filled step by step.
+    prompt: str | None = None
+    plan_id: UUID | None = None
+    spec: StackSpec | None = None
     candidate: Candidate | None = None
     blueprint: StackBlueprint | None = None
     stack: StackHandle | None = None
@@ -182,6 +179,7 @@ class Orchestrator:
         engine: Engine,
         translator: Translator | None,
         settings: Settings,
+        plans: PlanStore,
     ) -> None:
         self._bus = bus
         self._catalog = catalog
@@ -190,6 +188,7 @@ class Orchestrator:
         self._engine = engine
         self._translator = translator
         self._settings = settings
+        self._plans = plans
         self._jobs: dict[UUID, Job] = {}
         # The event loop keeps only *weak* references to tasks: without this set,
         # a running job could be garbage-collected mid-flight. It also lets
@@ -198,6 +197,9 @@ class Orchestrator:
 
     def get(self, job_id: UUID) -> Job | None:
         return self._jobs.get(job_id)
+
+    def get_plan(self, plan_id: UUID) -> StoredPlan | None:
+        return self._plans.get(plan_id)
 
     def list_jobs(self, *, active_only: bool = False) -> list[Job]:
         """Retained jobs, newest first (finished ones are kept `job_retention_seconds`)."""
@@ -228,39 +230,69 @@ class Orchestrator:
         instead of a job that fails a second later.
         """
         template: Template | None = None
+        stored: StoredPlan | None = None
         if isinstance(request, TemplateDeploymentRequest):
             # Allow-list lookup: the id never touches the filesystem directly.
             template = self._catalog.get(request.template_id)
             if template is None:
                 raise UnknownTemplateError(request.template_id)
+        elif isinstance(request, PlanDeploymentRequest):
+            stored = self._plans.get(request.plan_id)
+            if stored is None:
+                raise UnknownPlanError(request.plan_id)
+            template = stored.template
         elif self._translator is None:
             raise TranslatorUnavailableError
 
         project = request.project_name or self._generate_project_name(template)
         job = Job(
-            id=uuid4(), mode=request.mode, project_name=project, request=request, template=template
+            id=uuid4(),
+            mode=request.mode,
+            project_name=project,
+            request=request,
+            template=template,
+            prompt=request.prompt if isinstance(request, PromptDeploymentRequest) else None,
+            plan_id=stored.view.plan_id if stored is not None else None,
         )
         await self._reserve(job, must_exist=False)
 
-        first_step: tuple[PlanStep, StepHandler] = (
-            (PlanStep(key="template_resolution", label="Template loading"), self._load_template)
-            if template is not None
-            else (PlanStep(key="ai_translation", label="AI analysis"), self._translate)
-        )
-        # Template and prompt paths only differ by their first step. Both MUST
-        # go through security validation: templates are trusted, not exempt.
+        first_step: tuple[PlanStep, StepHandler]
+        if isinstance(request, TemplateDeploymentRequest):
+            first_step = (
+                PlanStep(key="template_resolution", label="Template loading"),
+                self._load_template,
+            )
+        elif stored is not None:
+            first_step = (PlanStep(key="plan_loading", label="Plan loading"), self._load_plan)
+        else:
+            first_step = (PlanStep(key="ai_translation", label="AI analysis"), self._translate)
+        # Every path goes through security validation: templates and reviewed plans are
+        # trusted, not exempt.
+        return self._launch(job, [first_step, *self._deploy_steps()])
+
+    def _deploy_steps(self) -> Plan:
+        return [
+            (PlanStep(key="security_validation", label="Security validation"), self._validate),
+            (PlanStep(key="workspace_setup", label="Workspace creation"), self._write_workspace),
+            (PlanStep(key="image_pull", label="Image download"), self._pull_images),
+            (PlanStep(key="network_setup", label="Network provisioning"), self._create_stack),
+            (PlanStep(key="container_deploy", label="Container startup"), self._start_stack),
+        ]
+
+    async def submit_planning(self, request: PlanRequest) -> Job:
+        """Analyse and validate a request into a stored plan; nothing is deployed."""
+        if self._translator is None:
+            raise TranslatorUnavailableError
+        job = Job(id=uuid4(), mode="planning", project_name=None, prompt=request.prompt)
+        self._jobs[job.id] = job  # no project to reserve
         return self._launch(
             job,
             [
-                first_step,
-                (PlanStep(key="security_validation", label="Security validation"), self._validate),
+                (PlanStep(key="ai_translation", label="AI analysis"), self._translate),
                 (
-                    PlanStep(key="workspace_setup", label="Workspace creation"),
-                    self._write_workspace,
+                    PlanStep(key="security_validation", label="Security validation"),
+                    self._validate_and_store_plan,
                 ),
-                (PlanStep(key="image_pull", label="Image download"), self._pull_images),
-                (PlanStep(key="network_setup", label="Network provisioning"), self._create_stack),
-                (PlanStep(key="container_deploy", label="Container startup"), self._start_stack),
             ],
         )
 
@@ -303,21 +335,28 @@ class Orchestrator:
 
     # --- Scheduling -------------------------------------------------------------
 
+    @staticmethod
+    def _project(job: Job) -> str:
+        if job.project_name is None:
+            raise RuntimeError("this step needs a project")
+        return job.project_name
+
     async def _reserve(self, job: Job, *, must_exist: bool) -> None:
+        project = self._project(job)
         if any(
-            other.project_name == job.project_name and other.status in _ACTIVE_STATUSES
+            other.project_name == project and other.status in _ACTIVE_STATUSES
             for other in self._jobs.values()
         ):
-            raise ProjectNameConflictError(job.project_name)
+            raise ProjectNameConflictError(project)
         # Register before awaiting, so a concurrent request for the same name
         # sees this job and gets a conflict.
         self._jobs[job.id] = job
-        exists = await asyncio.to_thread(self._workspaces.exists, job.project_name)
+        exists = await asyncio.to_thread(self._workspaces.exists, project)
         if exists != must_exist:
             del self._jobs[job.id]
             if must_exist:
-                raise UnknownEnvironmentError(job.project_name)
-            raise ProjectNameConflictError(job.project_name)
+                raise UnknownEnvironmentError(project)
+            raise ProjectNameConflictError(project)
 
     def _launch(self, job: Job, plan: Plan) -> Job:
         # Open the channel before the task starts, so a client that connects
@@ -372,6 +411,7 @@ class Orchestrator:
                 _success_message(job),
                 url=job.url,
                 urls=job.urls or None,
+                plan_id=job.plan_id if job.mode == "planning" else None,
             )
         finally:
             # Keep the history for late viewers and reconnects, then free memory.
@@ -430,7 +470,7 @@ class Orchestrator:
         ]
 
     def _meta(self, job: Job, blueprint: StackBlueprint) -> EnvironmentMeta:
-        project = job.project_name
+        project = self._project(job)
         return EnvironmentMeta(
             project=project,
             title=blueprint.title[:80] or project,
@@ -457,6 +497,19 @@ class Orchestrator:
             raise RuntimeError("template job without a resolved template")
         self._use_template(ctx, template)
 
+    async def _load_plan(self, ctx: StepContext) -> None:
+        stored = self._plans.get(ctx.job.plan_id) if ctx.job.plan_id is not None else None
+        if stored is None:
+            raise StepFailedError("This plan expired. Analyse the request again.")
+        ctx.job.template = stored.template
+        # A private copy: the stored plan stays pristine for another deployment.
+        ctx.job.candidate = replace(
+            stored.candidate,
+            source=copy.deepcopy(stored.candidate.source),
+            service_names=dict(stored.candidate.service_names),
+        )
+        ctx.log(f"Plan '{stored.view.title}' loaded ({len(stored.view.services)} service(s))")
+
     def _use_template(self, ctx: StepContext, template: Template) -> None:
         manifest = template.manifest
         ctx.log(f"Template '{manifest.name}' ({manifest.category.value})")
@@ -473,12 +526,13 @@ class Orchestrator:
         )
 
     async def _translate(self, ctx: StepContext) -> None:
-        request = ctx.job.request
-        if self._translator is None or not isinstance(request, PromptDeploymentRequest):
+        prompt = ctx.job.prompt
+        if self._translator is None or prompt is None:
             raise RuntimeError("AI step scheduled without a translator or a prompt")
 
         ctx.log(f"Asking {self._translator.model} for a deployment plan")
-        spec = await self._translator.translate(request.prompt)
+        spec = await self._translator.translate(prompt)
+        ctx.job.spec = spec
         ctx.log(f"Plan: {spec.title[:80]} - {spec.summary[:240]}")
 
         if spec.decision == "unsupported":
@@ -541,11 +595,77 @@ class Orchestrator:
         )
         ctx.job.blueprint = blueprint
 
+    async def _validate_and_store_plan(self, ctx: StepContext) -> None:
+        await self._validate(ctx)
+        candidate, blueprint = ctx.job.candidate, ctx.job.blueprint
+        if candidate is None or blueprint is None:
+            raise RuntimeError("plan step without a validated stack")
+        created_at, expires_at = self._plans.window()
+        view = self._plan_view(uuid4(), created_at, expires_at, ctx.job, blueprint)
+        self._plans.add(
+            StoredPlan(
+                view=view,
+                candidate=replace(candidate, source=copy.deepcopy(candidate.source)),
+                template=ctx.job.template,
+            )
+        )
+        ctx.job.plan_id = view.plan_id
+        ctx.log(f"Plan kept for review until {expires_at:%H:%M} UTC")
+
+    def _plan_view(
+        self,
+        plan_id: UUID,
+        created_at: datetime,
+        expires_at: datetime,
+        job: Job,
+        blueprint: StackBlueprint,
+    ) -> PlanView:
+        spec = job.spec
+        if job.template is not None:
+            purposes = {c.service: c.role for c in job.template.manifest.components}
+        else:
+            purposes = {s.name: s.purpose for s in spec.services} if spec is not None else {}
+        exposed = [item.service for item in blueprint.expose]
+        domain = self._settings.public_domain
+        services = []
+        for name, service in blueprint.compose.services.items():
+            allowed = self._allowlist.find(parse_image_ref(service.image))
+            purpose = purposes.get(name)
+            services.append(
+                PlanServiceView(
+                    service=name,
+                    name=blueprint.service_names.get(name, name),
+                    image=service.image,
+                    purpose=purpose[:200] if purpose else None,
+                    internet="egress" in service.networks,
+                    vulnerable=allowed is not None and allowed.vulnerable,
+                    web_access=(
+                        web_hostname("<project>", domain, None if name == exposed[0] else name)
+                        if name in exposed
+                        else None
+                    ),
+                )
+            )
+        return PlanView(
+            plan_id=plan_id,
+            created_at=created_at,
+            expires_at=expires_at,
+            decision="template" if job.template is not None else "custom",
+            title=(spec.title if spec is not None else blueprint.title)[:80] or blueprint.title,
+            summary=spec.summary[:400] if spec is not None else "",
+            explanation=spec.explanation[:600] if spec is not None else "",
+            template_id=blueprint.template_id,
+            services=services,
+            volumes=sorted(blueprint.compose.volumes),
+            secrets=len(blueprint.secrets),
+            needs_internet=blueprint.uses_egress,
+        )
+
     async def _write_workspace(self, ctx: StepContext) -> None:
         blueprint = ctx.job.blueprint
         if blueprint is None:
             raise RuntimeError("workspace step without a validated blueprint")
-        project = ctx.job.project_name
+        project = self._project(ctx.job)
         domain = self._settings.public_domain
         document = render_compose(blueprint, project=project, domain=domain)
         variables = {
@@ -578,7 +698,7 @@ class Orchestrator:
         services = list(blueprint.compose.services) if blueprint is not None else []
         await self._start_watched(ctx, self._stack(ctx), services)
         if blueprint is not None and blueprint.expose:
-            ctx.job.urls = self._endpoints(blueprint, ctx.job.project_name)
+            ctx.job.urls = self._endpoints(blueprint, self._project(ctx.job))
             for endpoint in ctx.job.urls:
                 ctx.log(f"Web UI of {endpoint.service}: {endpoint.url}")
             ctx.job.url = ctx.job.urls[0].url
@@ -629,15 +749,15 @@ class Orchestrator:
         return stack, list(services) if isinstance(services, dict) else []
 
     async def _teardown(self, ctx: StepContext) -> None:
-        stack, _ = await self._existing_stack(ctx.job.project_name)
+        stack, _ = await self._existing_stack(self._project(ctx.job))
         await self._engine.remove(stack, ctx.log)
 
     async def _stop_existing(self, ctx: StepContext) -> None:
-        stack, _ = await self._existing_stack(ctx.job.project_name)
+        stack, _ = await self._existing_stack(self._project(ctx.job))
         await self._engine.stop(stack, ctx.log)
 
     async def _start_existing(self, ctx: StepContext) -> None:
-        project = ctx.job.project_name
+        project = self._project(ctx.job)
         stack, services = await self._existing_stack(project)
         await self._start_watched(ctx, stack, services)
         meta = await asyncio.to_thread(self._workspaces.read_meta, project)
@@ -646,8 +766,9 @@ class Orchestrator:
             ctx.job.url = meta.urls[0].url
 
     async def _remove_workspace(self, ctx: StepContext) -> None:
-        await self._workspaces.remove(ctx.job.project_name)
-        ctx.log(f"Workspace '{ctx.job.project_name}' deleted, including its secrets")
+        project = self._project(ctx.job)
+        await self._workspaces.remove(project)
+        ctx.log(f"Workspace '{project}' deleted, including its secrets")
 
     @staticmethod
     def _stack(ctx: StepContext) -> StackHandle:
@@ -670,6 +791,8 @@ def health_summary(
 
 
 def _accepted_message(job: Job) -> str:
+    if job.mode == "planning":
+        return "AI analysis of the request accepted"
     project = job.project_name
     if job.mode in DEPLOY_MODES:
         return f"Deployment of '{project}' accepted ({job.mode})"
@@ -678,6 +801,8 @@ def _accepted_message(job: Job) -> str:
 
 
 def _success_message(job: Job) -> str:
+    if job.mode == "planning":
+        return f"Plan ready: {job.candidate.title if job.candidate else 'custom stack'}"
     project = job.project_name
     at = f" at {job.url}" if job.url else ""
     if job.mode in DEPLOY_MODES:

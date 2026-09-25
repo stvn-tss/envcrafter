@@ -10,19 +10,29 @@ from app.api.deps import CatalogDep, InventoryDep, OrchestratorDep, SettingsDep
 from app.core.security import require_trusted_json_request, require_trusted_origin
 from app.models.capabilities import CapabilitiesResponse
 from app.models.common import PROJECT_NAME_PATTERN, TEMPLATE_ID_PATTERN
-from app.models.deployment import DeploymentRequest, JobListResponse, JobSummary, LifecycleRequest
+from app.models.deployment import (
+    DeploymentRequest,
+    JobListResponse,
+    JobSummary,
+    LifecycleRequest,
+    PlanRequest,
+)
 from app.models.environment import EnvironmentListResponse, EnvironmentView
+from app.models.plan import PlanView
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
 from app.services.orchestrator import (
     Job,
     ProjectNameConflictError,
     TranslatorUnavailableError,
     UnknownEnvironmentError,
+    UnknownPlanError,
     UnknownTemplateError,
     job_events_url,
 )
 
 router = APIRouter(prefix="/api")
+
+_LLM_UNAVAILABLE = "Natural-language requests need an LLM API key (ENVCRAFTER_LLM_API_KEY)."
 
 
 def _summary(job: Job) -> JobSummary:
@@ -34,6 +44,7 @@ def _summary(job: Job) -> JobSummary:
         created_at=job.created_at,
         url=job.url,
         urls=job.urls,
+        plan_id=job.plan_id,
         events_url=job_events_url(job.id),
     )
 
@@ -103,13 +114,12 @@ async def create_job(payload: DeploymentRequest, orchestrator: OrchestratorDep) 
         job = await orchestrator.submit(payload.root)
     except UnknownTemplateError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown template") from None
+    except UnknownPlanError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown or expired plan") from None
     except ProjectNameConflictError:
         raise HTTPException(status.HTTP_409_CONFLICT, "This project name is already used") from None
     except TranslatorUnavailableError:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Natural-language requests need an LLM API key (ENVCRAFTER_LLM_API_KEY).",
-        ) from None
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, _LLM_UNAVAILABLE) from None
     return _summary(job)
 
 
@@ -127,6 +137,29 @@ async def get_job(job_id: UUID, orchestrator: OrchestratorDep) -> JobSummary:
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown job")
     return _summary(job)
+
+
+@router.post(
+    "/plans",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_trusted_json_request)],
+)
+async def create_plan(payload: PlanRequest, orchestrator: OrchestratorDep) -> JobSummary:
+    """Analyse a request into a reviewable plan; progress is streamed on `events_url` and
+    the succeeded event carries the `plan_id`. Nothing is deployed."""
+    try:
+        job = await orchestrator.submit_planning(payload)
+    except TranslatorUnavailableError:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, _LLM_UNAVAILABLE) from None
+    return _summary(job)
+
+
+@router.get("/plans/{plan_id}")
+async def get_plan(plan_id: UUID, orchestrator: OrchestratorDep) -> PlanView:
+    stored = orchestrator.get_plan(plan_id)
+    if stored is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown or expired plan")
+    return stored.view
 
 
 @router.get("/environments")
