@@ -44,7 +44,10 @@ def _summary(job: Job) -> JobSummary:
         created_at=job.created_at,
         url=job.url,
         urls=job.urls,
-        plan_id=job.plan_id,
+        # Same rule as the job.succeeded event: only a "planning" job announces a plan.
+        # Job.plan_id is also set on a "plan" deployment job (the plan it consumed),
+        # but that is internal pipeline state (_load_plan), never client-facing.
+        plan_id=job.plan_id if job.mode == "planning" else None,
         events_url=job_events_url(job.id),
     )
 

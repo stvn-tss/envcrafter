@@ -85,13 +85,21 @@ def test_reviewed_plan_deploys_after_revalidation(
     client = make_client(FakeTranslator(BOOKS))
     plan_id = plan(client)[-1]["plan_id"]
 
-    events = run_job(client, {"mode": "plan", "plan_id": plan_id, "project_name": "library"})
+    response = client.post(
+        "/api/jobs", json={"mode": "plan", "plan_id": plan_id, "project_name": "library"}
+    )
+    assert response.status_code == 202, response.text
+    summary = response.json()
+    assert summary["plan_id"] is None  # only a "planning" job's summary carries a plan_id
+    with client.websocket_connect(summary["events_url"]) as ws:
+        events = collect_events(ws)
 
     assert [step["key"] for step in events[0]["plan"]] == ["plan_loading", *DEPLOY_STEPS]
     assert "passed the schema and policy checks" in "\n".join(e["message"] for e in events)
     assert events[-1]["type"] == "job.succeeded"
     assert events[-1]["urls"][0]["url"] == "http://library.localhost"
     assert events[-1].get("plan_id") is None  # only planning jobs announce a plan
+    assert client.get(f"/api/jobs/{summary['job_id']}").json()["plan_id"] is None
     meta = json.loads(
         (settings.workspaces_dir / "library" / "meta.json").read_text(encoding="utf-8")
     )
@@ -118,6 +126,23 @@ def test_template_plans_list_the_template_components(make_client: ClientFactory)
     assert {service["service"] for service in review["services"]} == {"glpi", "mariadb"}
     glpi = next(service for service in review["services"] if service["service"] == "glpi")
     assert glpi["purpose"].startswith("Web application")
+
+
+def test_a_template_decision_plan_can_be_deployed(
+    make_client: ClientFactory, settings: Settings
+) -> None:
+    client = make_client(FakeTranslator(spec(decision="template", template_id="glpi")))
+    plan_id = plan(client)[-1]["plan_id"]
+    assert client.get(f"/api/plans/{plan_id}").json()["title"] == "GLPI"
+
+    events = run_job(client, {"mode": "plan", "plan_id": plan_id, "project_name": "helpdesk"})
+
+    assert [step["key"] for step in events[0]["plan"]] == ["plan_loading", *DEPLOY_STEPS]
+    assert events[-1]["type"] == "job.succeeded"
+    meta = json.loads(
+        (settings.workspaces_dir / "helpdesk" / "meta.json").read_text(encoding="utf-8")
+    )
+    assert (meta["origin"], meta["template_id"], meta["title"]) == ("prompt", "glpi", "GLPI")
 
 
 def test_rejected_plans_are_never_stored(make_client: ClientFactory) -> None:

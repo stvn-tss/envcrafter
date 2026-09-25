@@ -651,7 +651,11 @@ class Orchestrator:
             created_at=created_at,
             expires_at=expires_at,
             decision="template" if job.template is not None else "custom",
-            title=(spec.title if spec is not None else blueprint.title)[:80] or blueprint.title,
+            # The title the review shows must match what actually gets deployed
+            # (Plan ready: message, meta.json, dashboard): the candidate/blueprint
+            # title (manifest name for a template, spec.title[:60] for a custom
+            # stack), never the raw, untruncated spec.title.
+            title=blueprint.title,
             summary=spec.summary[:400] if spec is not None else "",
             explanation=spec.explanation[:600] if spec is not None else "",
             template_id=blueprint.template_id,
