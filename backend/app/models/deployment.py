@@ -94,6 +94,7 @@ class EventType(StrEnum):
     JOB_ACCEPTED = "job.accepted"  # carries the full step plan
     STEP_STARTED = "step.started"
     STEP_LOG = "step.log"
+    STEP_PROGRESS = "step.progress"  # measurable progress of the running step (throttled)
     STEP_COMPLETED = "step.completed"
     STEP_FAILED = "step.failed"
     JOB_SUCCEEDED = "job.succeeded"
@@ -128,6 +129,8 @@ class JobEvent(BaseModel):
     plan: list[PlanStep] | None = None  # only on job.accepted
     url: str | None = None  # only on job.succeeded, when the stack has a web UI
     urls: list[WebEndpoint] | None = None  # every web UI on job.succeeded, main one first
+    # Only on step.progress: 0-100, or None when the progress cannot be measured.
+    percent: Annotated[int, Field(ge=0, le=100)] | None = None
 
 
 class JobSummary(BaseModel):

@@ -9,7 +9,7 @@ from collections.abc import Sequence
 
 import yaml
 
-from app.engine.base import LogSink, ServiceStatus, StackHandle
+from app.engine.base import LogSink, ProgressSink, ServiceStatus, StackHandle
 
 
 class SimulatedEngine:
@@ -17,10 +17,12 @@ class SimulatedEngine:
         self._delay = delay
         self._stopped: set[str] = set()  # compose projects stopped by stop()
 
-    async def pull(self, stack: StackHandle, log: LogSink) -> None:
-        for service, image in (await self._images(stack)).items():
+    async def pull(self, stack: StackHandle, log: LogSink, progress: ProgressSink) -> None:
+        images = list((await self._images(stack)).items())
+        for index, (service, image) in enumerate(images, start=1):
             log(f"[simulated] {service}: pulling {image}")
             await asyncio.sleep(self._delay)
+            progress(index * 100 // len(images), f"{index} of {len(images)} images")
 
     async def create(self, stack: StackHandle, log: LogSink) -> None:
         log(f"[simulated] networks and containers created for {stack.compose_project}")

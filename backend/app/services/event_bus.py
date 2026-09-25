@@ -18,10 +18,14 @@ Design choices
   evicted with a "lagged" marker instead of applying back-pressure to the
   pipeline. Its client reconnects with the last `seq` it rendered and catches up
   from the history buffer.
-* The bus (not the caller) assigns `seq`, so ordering is defined in one place.
+* The bus (not the caller) assigns `seq`: strictly increasing per job, but no
+  longer contiguous once step.progress coalescing evicts entries from the history.
 * No locks: everything runs on a single event loop, and there is no `await`
   between snapshotting the history and registering a subscriber queue, so no
   event can be published "in between" and be lost or duplicated.
+* Live subscribers receive every event, including every step.progress tick; the
+  bounded history (replayed on connect / reconnect) keeps only the latest
+  step.progress per step, so a long download cannot push the step logs out of it.
 
 Limitation: state lives in process memory, so run a single Uvicorn worker. A
 multi-worker deployment swaps this class for a Redis Streams implementation
@@ -29,6 +33,7 @@ exposing the same `publish()` / `subscribe(after_seq)` contract.
 """
 
 import asyncio
+import contextlib
 from collections import deque
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
@@ -59,6 +64,9 @@ class _JobChannel:
     subscribers: set[_Subscriber] = field(default_factory=set)
     next_seq: int = 1
     closed: bool = False  # True once a terminal event has been published
+    # Latest step.progress per step: a newer one replaces it in the history, so a long
+    # download cannot push the step logs out of the bounded replay buffer.
+    progress: dict[str, JobEvent] = field(default_factory=dict)
 
 
 class JobEventBus:
@@ -85,6 +93,7 @@ class JobEventBus:
         plan: list[PlanStep] | None = None,
         url: str | None = None,
         urls: list[WebEndpoint] | None = None,
+        percent: int | None = None,
     ) -> JobEvent:
         channel = self._channels.get(job_id)
         if channel is None:
@@ -104,8 +113,16 @@ class JobEventBus:
             plan=plan,
             url=url,
             urls=urls,
+            percent=percent,
         )
         channel.next_seq += 1
+        if event_type == EventType.STEP_PROGRESS:
+            key = step_key or ""
+            previous = channel.progress.get(key)
+            if previous is not None:
+                with contextlib.suppress(ValueError):  # already evicted from the history
+                    channel.history.remove(previous)
+            channel.progress[key] = event
         channel.history.append(event)
 
         # Fan-out without ever awaiting: the producer's pace is independent of

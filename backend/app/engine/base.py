@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Protocol
 
 LogSink = Callable[[str], None]
+ProgressSink = Callable[[int | None, str], None]
 
 
 class EngineError(RuntimeError):
@@ -30,7 +31,7 @@ class ServiceStatus:
 
 
 class Engine(Protocol):
-    async def pull(self, stack: StackHandle, log: LogSink) -> None: ...
+    async def pull(self, stack: StackHandle, log: LogSink, progress: ProgressSink) -> None: ...
 
     async def create(self, stack: StackHandle, log: LogSink) -> None:
         """Create networks, volumes and containers without starting them."""

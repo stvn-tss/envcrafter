@@ -18,14 +18,15 @@ import asyncio
 import logging
 import re
 import secrets
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from app.core.config import Settings
-from app.engine.base import Engine, EngineError, StackHandle
+from app.engine.base import Engine, EngineError, ServiceStatus, StackHandle
 from app.models.common import DEPLOY_MODES, JobMode
 from app.models.deployment import (
     EventType,
@@ -125,6 +126,9 @@ class StepContext:
     index: int
     total: int
     bus: JobEventBus
+    progress_interval: float = 0.5
+    clock: Callable[[], float] = time.monotonic
+    _last_progress: float | None = field(default=None, init=False, repr=False)
 
     def emit(self, event_type: EventType, message: str) -> None:
         # Every step event carries its position so the UI can render "2/6"
@@ -140,6 +144,27 @@ class StepContext:
 
     def log(self, message: str) -> None:
         self.emit(EventType.STEP_LOG, message)
+
+    def progress(self, percent: int | None, message: str) -> None:
+        """Measurable progress, throttled to one event per interval; 100% always goes out."""
+        if percent is not None:
+            percent = max(0, min(100, percent))
+        now = self.clock()
+        recent = (
+            self._last_progress is not None and now - self._last_progress < self.progress_interval
+        )
+        if recent and percent != 100:
+            return
+        self._last_progress = now
+        self.bus.publish(
+            self.job.id,
+            EventType.STEP_PROGRESS,
+            message,
+            step_key=self.step.key,
+            step_index=self.index,
+            step_total=self.total,
+            percent=percent,
+        )
 
 
 StepHandler = Callable[[StepContext], Awaitable[None]]
@@ -316,7 +341,14 @@ class Orchestrator:
         ctx: StepContext | None = None
         try:
             for index, (step, handler) in enumerate(plan, start=1):
-                ctx = StepContext(job=job, step=step, index=index, total=len(plan), bus=self._bus)
+                ctx = StepContext(
+                    job=job,
+                    step=step,
+                    index=index,
+                    total=len(plan),
+                    bus=self._bus,
+                    progress_interval=self._settings.progress_interval_seconds,
+                )
                 ctx.emit(EventType.STEP_STARTED, f"[{index}/{len(plan)}] {step.label}")
                 await handler(ctx)
                 ctx.emit(EventType.STEP_COMPLETED, f"[{index}/{len(plan)}] {step.label} done")
@@ -536,19 +568,44 @@ class Orchestrator:
         )
 
     async def _pull_images(self, ctx: StepContext) -> None:
-        await self._engine.pull(self._stack(ctx), ctx.log)
+        await self._engine.pull(self._stack(ctx), ctx.log, ctx.progress)
 
     async def _create_stack(self, ctx: StepContext) -> None:
         await self._engine.create(self._stack(ctx), ctx.log)
 
     async def _start_stack(self, ctx: StepContext) -> None:
-        await self._engine.start(self._stack(ctx), ctx.log)
         blueprint = ctx.job.blueprint
+        services = list(blueprint.compose.services) if blueprint is not None else []
+        await self._start_watched(ctx, self._stack(ctx), services)
         if blueprint is not None and blueprint.expose:
             ctx.job.urls = self._endpoints(blueprint, ctx.job.project_name)
             for endpoint in ctx.job.urls:
                 ctx.log(f"Web UI of {endpoint.service}: {endpoint.url}")
             ctx.job.url = ctx.job.urls[0].url
+
+    async def _start_watched(
+        self, ctx: StepContext, stack: StackHandle, expected: Sequence[str]
+    ) -> None:
+        """Start the stack; meanwhile report every few seconds how many services are ready."""
+        watcher = asyncio.create_task(self._watch_health(ctx, stack, expected))
+        try:
+            await self._engine.start(stack, ctx.log)
+        finally:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
+
+    async def _watch_health(
+        self, ctx: StepContext, stack: StackHandle, expected: Sequence[str]
+    ) -> None:
+        while True:
+            await asyncio.sleep(self._settings.health_poll_seconds)
+            try:
+                observed = (await self._engine.status([stack])).get(stack.project, [])
+            except Exception:
+                # A sign of life only: never let it fail the deployment.
+                logger.debug("Health watcher could not read %s", stack.project, exc_info=True)
+                continue
+            ctx.progress(*health_summary(expected, observed))
 
     async def _existing_stack(self, project: str) -> tuple[StackHandle, list[str]]:
         """Stack handle and service names of an existing workspace. The edge network is
@@ -581,8 +638,8 @@ class Orchestrator:
 
     async def _start_existing(self, ctx: StepContext) -> None:
         project = ctx.job.project_name
-        stack, _ = await self._existing_stack(project)
-        await self._engine.start(stack, ctx.log)
+        stack, services = await self._existing_stack(project)
+        await self._start_watched(ctx, stack, services)
         meta = await asyncio.to_thread(self._workspaces.read_meta, project)
         if meta is not None and meta.urls:
             ctx.job.urls = list(meta.urls)
@@ -597,6 +654,19 @@ class Orchestrator:
         if ctx.job.stack is None:
             raise RuntimeError("engine step without a workspace")
         return ctx.job.stack
+
+
+def health_summary(
+    expected: Sequence[str], observed: Sequence[ServiceStatus]
+) -> tuple[int | None, str]:
+    """(percent, message) for the health watcher: ready = running and not unhealthy/starting."""
+    ready = {s.service for s in observed if s.state == "running" and s.health in (None, "healthy")}
+    waiting = [name for name in expected if name not in ready]
+    total = len(expected)
+    message = f"{total - len(waiting)} of {total} services ready"
+    if waiting:
+        message += " · waiting for " + ", ".join(waiting[:3]) + ("…" if len(waiting) > 3 else "")
+    return ((total - len(waiting)) * 100 // total if total else None), message
 
 
 def _accepted_message(job: Job) -> str:

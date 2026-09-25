@@ -10,12 +10,14 @@ Security properties:
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
-from app.engine.base import EngineError, LogSink, ServiceStatus, StackHandle
+from app.engine.base import EngineError, LogSink, ProgressSink, ServiceStatus, StackHandle
+from app.engine.pull_progress import PullProgressTracker
 from app.models.common import PROJECT_NAME_PATTERN
 from app.models.template import SERVICE_NAME_PATTERN
 from app.workspace.renderer import MANAGED_LABEL, PROJECT_LABEL, SERVICE_LABEL
@@ -54,8 +56,30 @@ class DockerComposeEngine:
         self._start_timeout = start_timeout
         self._stop_timeout = stop_timeout
 
-    async def pull(self, stack: StackHandle, log: LogSink) -> None:
-        await self._run(self._compose(stack, "pull"), log, timeout=self._pull_timeout)
+    async def pull(self, stack: StackHandle, log: LogSink, progress: ProgressSink) -> None:
+        tracker = PullProgressTracker()
+        last: tuple[int, str] | None = None
+
+        def on_line(line: str) -> None:
+            nonlocal last
+            try:
+                event = json.loads(line)
+            except ValueError:
+                log(line[:_MAX_LINE])  # Compose's own warnings are not JSON
+                return
+            for message in tracker.feed(event):
+                log(message)
+            snapshot = tracker.snapshot()
+            if snapshot != last:
+                last = snapshot
+                progress(*snapshot)
+
+        await self._run(
+            self._compose(stack, "pull", progress_mode="json"),
+            log,
+            timeout=self._pull_timeout,
+            on_line=on_line,
+        )
 
     async def create(self, stack: StackHandle, log: LogSink) -> None:
         await self._run(self._compose(stack, "up", "--no-start"), log, timeout=120)
@@ -149,11 +173,11 @@ class DockerComposeEngine:
     # --- Internals --------------------------------------------------------------
 
     @staticmethod
-    def _compose(stack: StackHandle, *args: str) -> list[str]:
+    def _compose(stack: StackHandle, *args: str, progress_mode: str = "plain") -> list[str]:
         return [
             "compose",
             "--progress",
-            "plain",
+            progress_mode,
             "--project-name",
             stack.compose_project,
             "--project-directory",
@@ -196,7 +220,14 @@ class DockerComposeEngine:
             raise EngineError(f"`{_describe(args)}` failed (exit code {process.returncode})")
         return stdout[:_MAX_CAPTURE].decode("utf-8", "replace")
 
-    async def _run(self, args: list[str], log: LogSink, *, timeout: float) -> None:  # noqa: ASYNC109
+    async def _run(
+        self,
+        args: list[str],
+        log: LogSink,
+        *,
+        timeout: float,  # noqa: ASYNC109
+        on_line: Callable[[str], None] | None = None,
+    ) -> None:
         process = await asyncio.create_subprocess_exec(
             self._docker,
             *args,
@@ -211,7 +242,11 @@ class DockerComposeEngine:
                 if process.stdout is not None:
                     async for raw in process.stdout:
                         line = _ANSI_RE.sub("", raw.decode("utf-8", "replace")).strip()
-                        if line and not _NOISE_RE.search(line):
+                        if not line:
+                            continue
+                        if on_line is not None:
+                            on_line(line)
+                        elif not _NOISE_RE.search(line):
                             log(line[:_MAX_LINE])
                 code = await process.wait()
         except TimeoutError:

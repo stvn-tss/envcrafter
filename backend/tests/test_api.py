@@ -48,7 +48,8 @@ def test_template_job_runs_every_step_and_writes_workspace(
     assert [step["key"] for step in events[0]["plan"]] == ["template_resolution", *DEPLOY_STEPS]
     assert events[-1]["type"] == "job.succeeded"
     assert events[-1]["url"] == "http://demo.localhost"
-    assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+    seqs = [e["seq"] for e in events]
+    assert seqs == sorted(set(seqs))  # strictly increasing (replays may skip coalesced progress)
 
     workspace = settings.workspaces_dir / "demo"
     compose = yaml.safe_load((workspace / "compose.yaml").read_text(encoding="utf-8"))
@@ -188,11 +189,12 @@ def test_project_name_cannot_be_reused(client: TestClient) -> None:
 def test_reconnect_replays_only_missed_events(client: TestClient) -> None:
     full = run_job(client, {"mode": "template", "template_id": "owasp-juice-shop"})
     job_id = full[0]["job_id"]
+    cutoff = full[2]["seq"]
 
-    with client.websocket_connect(f"/ws/jobs/{job_id}?after_seq=3") as ws:
+    with client.websocket_connect(f"/ws/jobs/{job_id}?after_seq={cutoff}") as ws:
         replay = collect_events(ws)
 
-    assert [e["seq"] for e in replay] == [e["seq"] for e in full[3:]]
+    assert [e["seq"] for e in replay] == [e["seq"] for e in full if e["seq"] > cutoff]
 
 
 @pytest.mark.parametrize(
