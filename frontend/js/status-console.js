@@ -378,6 +378,9 @@ export class StatusConsole {
     this.result.replaceChildren(...this.#resultContent(outcome, event));
     this.result.hidden = false;
     this.#announce(outcome === "success" ? event.message : `Failed: ${event.message}`);
+    if (outcome === "success" && this.#job?.mode === "planning" && this.#context.autoReview && typeof event.plan_id === "string") {
+      this.onReviewPlan?.(event.plan_id);
+    }
   }
 
   #resultContent(outcome, event) {
@@ -393,9 +396,16 @@ export class StatusConsole {
       }
       return children;
     }
+    if (this.#job?.mode === "planning") {
+      if (typeof event.plan_id === "string") {
+        const review = el("button", { className: "button primary", text: "Review plan", attrs: { type: "button" } });
+        review.addEventListener("click", () => this.onReviewPlan?.(event.plan_id));
+        children.push(el("div", { className: "result-actions" }, [review]));
+      }
+      return children;
+    }
     const project = this.#job?.project_name;
     if (["removal", "stop"].includes(this.#job?.mode) || !project) return children;
-    if (this.#job?.mode === "planning") return children;
 
     const template = this.#context.template ?? null;
     const urls = this.#environmentUrls(event, project, template);

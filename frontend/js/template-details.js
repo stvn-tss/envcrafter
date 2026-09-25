@@ -5,7 +5,7 @@
  * Everything comes from /api/templates and is rendered with textContent only.
  */
 import { appIcon, categoryTag, footprintItems, isVulnerable } from "./catalog.js";
-import { copyButton } from "./clipboard.js";
+import { componentsTable, networkSummary, section, volumesList, vulnerableCallout } from "./dialog-parts.js";
 import { el } from "./dom.js";
 import { autoProjectName, projectNameProblem, webUrl } from "./environment.js";
 import { icon } from "./icons.js";
@@ -65,7 +65,7 @@ export class TemplateDetails {
       ...(isVulnerable(template) ? [vulnerableCallout()] : []),
       section("What gets installed", componentsTable(template.components)),
       section("Web access", this.#accessSection),
-      section("Network", networkSummary(template)),
+      section("Network", networkSummary(template.needs_internet)),
       section("Persistent storage", volumesList(template.volumes)),
       section("Footprint", el("div", {}, [
         el("ul", { className: "inline-list" }, footprintItems(template).map((text) => el("li", { text }))),
@@ -138,58 +138,4 @@ export class TemplateDetails {
     this.error.hidden = true;
     this.error.replaceChildren();
   }
-}
-
-function section(title, content) {
-  return el("section", { className: "dialog-section" }, [el("h3", { text: title }), content]);
-}
-
-function vulnerableCallout() {
-  return el("p", { className: "callout" }, [
-    icon("alert"),
-    el("span", {
-      text:
-        "Intentionally vulnerable, for security training only. It never gets Internet access " +
-        "and is reachable from this machine only.",
-    }),
-  ]);
-}
-
-function componentsTable(components) {
-  const rows = components.map((component) =>
-    el("tr", {}, [
-      el("th", { text: component.name, attrs: { scope: "row" } }),
-      el("td", { text: component.role }),
-      el("td", {}, [
-        el("div", { className: "image-cell" }, [
-          el("code", { text: component.image }),
-          copyButton(component.image, `Copy the image of ${component.name}`),
-        ]),
-      ]),
-    ]),
-  );
-  return el("div", { className: "table-wrap" }, [
-    el("table", { className: "components" }, [
-      el("thead", {}, [
-        el("tr", {}, [
-          el("th", { text: "Component", attrs: { scope: "col" } }),
-          el("th", { text: "Role", attrs: { scope: "col" } }),
-          el("th", { text: "Image (pinned)", attrs: { scope: "col" } }),
-        ]),
-      ]),
-      el("tbody", {}, rows),
-    ]),
-  ]);
-}
-
-function networkSummary(template) {
-  const text = template.needs_internet
-    ? "Own isolated network. Outbound Internet access is enabled for the services that need it."
-    : "Own isolated network with no Internet access. Reachable only from this machine.";
-  return el("p", { className: "network-note", text, attrs: { "data-internet": String(template.needs_internet) } });
-}
-
-function volumesList(volumes) {
-  if (!volumes.length) return el("p", { className: "hint", text: "No persistent data: everything resets when removed." });
-  return el("ul", { className: "inline-list mono" }, volumes.map((volume) => el("li", { text: volume })));
 }

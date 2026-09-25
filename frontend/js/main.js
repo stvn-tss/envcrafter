@@ -1,6 +1,7 @@
 /** Entry point: wires the catalog, the request form, the dialogs and the status console. */
 import {
-  ApiError, createJob, fetchActiveJobs, fetchJob, fetchTemplates, removeEnvironment, runEnvironmentAction,
+  ApiError, createJob, createPlan, fetchActiveJobs, fetchJob, fetchPlan, fetchTemplates, removeEnvironment,
+  runEnvironmentAction,
 } from "./api.js";
 import { Catalog } from "./catalog.js";
 import { loadConfig } from "./config.js";
@@ -8,6 +9,7 @@ import { EnvironmentsPanel } from "./environments.js";
 import { icon } from "./icons.js";
 import { openJobStream } from "./job-stream.js";
 import { LogsDialog } from "./logs-dialog.js";
+import { PlanReview } from "./plan-review.js";
 import { PromptForm } from "./prompt-form.js";
 import { RemoveDialog } from "./remove-dialog.js";
 import { STATUS, StatusConsole } from "./status-console.js";
@@ -56,6 +58,7 @@ const statusConsole = new StatusConsole(statusPanel, {
   onRemove: (target) => removeDialog.open(target),
   onReconnect: () => follow(activeJob),
   onChange: (next) => updateChrome(next),
+  onReviewPlan: (planId) => openPlan(planId),
 });
 const removeDialog = new RemoveDialog(document.querySelector("#remove-dialog"), {
   onConfirm: (project) => run(() => removeEnvironment(project), {}),
@@ -74,8 +77,23 @@ const catalog = new Catalog(document.querySelector("#catalog"), {
   categoryLabel,
 });
 const promptForm = new PromptForm(document.querySelector("#prompt-form"), {
-  onSubmit: (prompt) => run(() => createJob({ mode: "prompt", prompt }), { title: "AI request" }),
+  onSubmit: (prompt) => run(() => createPlan(prompt), { title: "AI analysis", autoReview: true }),
 });
+const planReview = new PlanReview(document.querySelector("#plan-dialog"), {
+  onDeploy: (plan, projectName) => {
+    const payload = { mode: "plan", plan_id: plan.plan_id };
+    if (projectName) payload.project_name = projectName;
+    return run(() => createJob(payload), { title: plan.title, templateId: plan.template_id ?? undefined });
+  },
+});
+
+async function openPlan(planId) {
+  try {
+    planReview.open(await fetchPlan(planId));
+  } catch (error) {
+    showToast(error instanceof ApiError ? error.message : "The plan could not be loaded.");
+  }
+}
 const environments = new EnvironmentsPanel(document.querySelector("#environments"), {
   onAction: async (project, action, environment) => {
     const error = await run(() => runEnvironmentAction(project, action), { title: environment.title, templateId: environment.template_id });

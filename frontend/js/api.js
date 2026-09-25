@@ -75,3 +75,19 @@ export async function runEnvironmentAction(project, action) {
   if (!response.ok) throw new ApiError(await readError(response));
   return response.json();
 }
+
+/** Starts the AI analysis of a request. Resolves with the planning job (HTTP 202). */
+export async function createPlan(prompt) {
+  const response = await fetch("/api/plans", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt }),
+  });
+  if (!response.ok) throw new ApiError(await readError(response));
+  return response.json();
+}
+
+/** The reviewable plan; rejects with ApiError (404) once it expired. */
+export function fetchPlan(planId) {
+  return getJson(`/api/plans/${encodeURIComponent(planId)}`);
+}
