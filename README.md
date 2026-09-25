@@ -159,6 +159,10 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_ENVIRONMENT` | `development` | `development` or `production` (affects API docs exposure). |
 | `ENVCRAFTER_PUBLIC_DOMAIN` | `localhost` | Environments are served at `http://<project>.<public_domain>`. |
 | `ENVCRAFTER_SERVE_FRONTEND` | `true` | Serve the static frontend from the API process. |
+| `ENVCRAFTER_FRONTEND_DIR` | `<repository root>/frontend` | Where the static frontend is served from. |
+| `ENVCRAFTER_TEMPLATES_DIR` | `<repository root>/templates` | Where the template catalog is loaded from. |
+| `ENVCRAFTER_IMAGE_ALLOWLIST` | `backend/app/policy/image_allowlist.yaml` | Path to the image allow-list file. |
+| `ENVCRAFTER_WORKSPACES_DIR` | `<repository root>/workspaces` | Where generated compose files, secrets and metadata are written. |
 | `ENVCRAFTER_LLM_API_KEY` | *(empty)* | Claude API key. Prompt mode and AI plans are disabled without it. |
 | `ENVCRAFTER_LLM_MODEL` | `claude-opus-5-5` | Model used to turn a request into a stack. |
 | `ENVCRAFTER_LLM_EFFORT` | `high` | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. |
@@ -183,7 +187,11 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_LOG_TAIL_MAX` | `1000` | Largest `tail` accepted on the logs WebSocket. |
 | `ENVCRAFTER_MAX_LOG_STREAMS` | `4` | Concurrent container log streams. |
 | `ENVCRAFTER_SIMULATED_STEP_DELAY` | `0.4` | Delay between simulated engine steps (dev/tests only). |
-| `ENVCRAFTER_TEMPLATES_DIR`, `ENVCRAFTER_IMAGE_ALLOWLIST`, `ENVCRAFTER_WORKSPACES_DIR`, `ENVCRAFTER_FRONTEND_DIR` | repository paths | Override only for a non-standard layout. |
+
+The defaults above for `ENVCRAFTER_TEMPLATES_DIR`, `ENVCRAFTER_WORKSPACES_DIR` and
+`ENVCRAFTER_FRONTEND_DIR` apply to the local dev server; the control-plane image sets its own
+values (`/app/templates`, `/data/workspaces`, `/app/frontend`) as `ENV` in `backend/Dockerfile`,
+matching where it copies those directories inside the container.
 
 ## API overview
 
