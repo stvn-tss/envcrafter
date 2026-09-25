@@ -7,6 +7,7 @@ import { loadConfig } from "./config.js";
 import { EnvironmentsPanel } from "./environments.js";
 import { icon } from "./icons.js";
 import { openJobStream } from "./job-stream.js";
+import { LogsDialog } from "./logs-dialog.js";
 import { PromptForm } from "./prompt-form.js";
 import { RemoveDialog } from "./remove-dialog.js";
 import { STATUS, StatusConsole } from "./status-console.js";
@@ -59,6 +60,7 @@ const statusConsole = new StatusConsole(statusPanel, {
 const removeDialog = new RemoveDialog(document.querySelector("#remove-dialog"), {
   onConfirm: (project) => run(() => removeEnvironment(project), {}),
 });
+const logsDialog = new LogsDialog(document.querySelector("#logs-dialog"));
 const details = new TemplateDetails(document.querySelector("#template-dialog"), {
   onDeploy: (template, projectName) => deployTemplate(template, projectName),
   categoryLabel,
@@ -79,7 +81,7 @@ const environments = new EnvironmentsPanel(document.querySelector("#environments
     const error = await run(() => runEnvironmentAction(project, action), { title: environment.title, templateId: environment.template_id });
     if (error) showToast(error);
   },
-  onLogs: null, // wired by the logs dialog (Task 11)
+  onLogs: (environment) => logsDialog.open(environment),
   onRemove: (target) => removeDialog.open(target),
   onFollow: (job, environment) => follow({ job: { ...job, project_name: environment.project }, context: { title: environment.title, templateId: environment.template_id } }),
   onUpdate: (list) => {

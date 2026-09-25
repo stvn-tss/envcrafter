@@ -449,6 +449,12 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 .jump-latest .icon { width: 12px; height: 12px; }
 
+.logs-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 12px 0 10px; }
+.logs-toolbar label { font-size: var(--text-sm); font-weight: 600; }
+.logs-toolbar .input { width: auto; min-width: 200px; padding: 4px 8px; }
+.logs-view { margin: 0 0 10px; }
+.log-list.tall { max-height: min(60vh, 520px); }
+
 /* Shortcut to the status panel when it is scrolled out of view (single-column layout). */
 .job-pill {
   position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 10;
@@ -502,6 +508,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
   border-radius: var(--radius);
 }
 .dialog.small { width: min(480px, calc(100vw - 32px)); }
+.dialog.wide { width: min(960px, calc(100vw - 32px)); }
 .dialog[open] { display: flex; flex-direction: column; }
 .dialog::backdrop { background: rgb(0 0 0 / 0.6); }
 .dialog-form { display: flex; flex-direction: column; min-height: 0; }
