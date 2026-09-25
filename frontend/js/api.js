@@ -14,17 +14,34 @@ async function readError(response) {
   return `Request failed (HTTP ${response.status})`;
 }
 
-export async function fetchTemplates() {
-  const response = await fetch("/api/templates");
+async function getJson(url) {
+  const response = await fetch(url);
   if (!response.ok) throw new ApiError(await readError(response));
   return response.json();
 }
 
+export function fetchTemplates() {
+  return getJson("/api/templates");
+}
+
 /** Server capabilities: engine, LLM availability, public domain, project name rule. */
-export async function fetchConfig() {
-  const response = await fetch("/api/config");
-  if (!response.ok) throw new ApiError(await readError(response));
-  return response.json();
+export function fetchConfig() {
+  return getJson("/api/config");
+}
+
+/** Every environment with its live state (GET /api/environments). */
+export function fetchEnvironments() {
+  return getJson("/api/environments");
+}
+
+/** One job summary; rejects with ApiError (404) once the job is forgotten. */
+export function fetchJob(jobId) {
+  return getJson(`/api/jobs/${encodeURIComponent(jobId)}`);
+}
+
+/** Queued and running jobs, newest first. */
+export function fetchActiveJobs() {
+  return getJson("/api/jobs?active=true");
 }
 
 /** Starts a deployment. Resolves with the job summary (HTTP 202). */
@@ -43,6 +60,17 @@ export async function createJob(payload) {
 export async function removeEnvironment(project) {
   const response = await fetch(`/api/environments/${encodeURIComponent(project)}`, {
     method: "DELETE",
+  });
+  if (!response.ok) throw new ApiError(await readError(response));
+  return response.json();
+}
+
+/** Stop, start or restart an environment. Resolves with the job summary (HTTP 202). */
+export async function runEnvironmentAction(project, action) {
+  const response = await fetch(`/api/environments/${encodeURIComponent(project)}/actions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
   });
   if (!response.ok) throw new ApiError(await readError(response));
   return response.json();

@@ -40,6 +40,15 @@
         </form>
       </section>
 
+      <section id="environments" class="panel" aria-labelledby="environments-title">
+        <div class="panel-header">
+          <h2 id="environments-title">Environments <span id="environments-count" class="count" hidden></span></h2>
+        </div>
+        <p id="environments-error" class="inline-alert" role="alert" hidden>Environments are unavailable. Retrying…</p>
+        <ul id="environment-list" class="environment-list" aria-live="off"></ul>
+        <p id="environments-empty" class="hint">No environment yet. Deploy a template or describe one above.</p>
+      </section>
+
       <section id="catalog" class="panel" aria-labelledby="catalog-title">
         <div class="panel-header">
           <h2 id="catalog-title">Templates</h2>

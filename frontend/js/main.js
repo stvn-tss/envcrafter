@@ -1,7 +1,10 @@
 /** Entry point: wires the catalog, the request form, the dialogs and the status console. */
-import { ApiError, createJob, fetchTemplates, removeEnvironment } from "./api.js";
+import {
+  ApiError, createJob, fetchActiveJobs, fetchJob, fetchTemplates, removeEnvironment, runEnvironmentAction,
+} from "./api.js";
 import { Catalog } from "./catalog.js";
 import { loadConfig } from "./config.js";
+import { EnvironmentsPanel } from "./environments.js";
 import { icon } from "./icons.js";
 import { openJobStream } from "./job-stream.js";
 import { PromptForm } from "./prompt-form.js";
@@ -16,11 +19,17 @@ const statusTitle = document.querySelector("#status-title");
 const jobPill = document.querySelector("#job-pill");
 const jobPillText = document.querySelector("#job-pill-text");
 
+const JOB_KEY = "envcrafter.job";
+const LIVE_STATES = new Set(["pending", "running", "starting", "degraded"]);
+const TERMINAL = new Set(["ready", "removed", "stopped", "running", "planned", "failed"]);
+
 let activeStream = null;
 let activeJob = null; // { job, context } currently displayed
 let summary = null; // last StatusConsole summary
 let statusInView = true;
 let categoryLabels = new Map();
+let templatesById = new Map();
+let lastStatus = null;
 const categoryLabel = (id) => categoryLabels.get(id) ?? id;
 
 // Short labels for the browser tab and the floating shortcut.
@@ -65,6 +74,24 @@ const catalog = new Catalog(document.querySelector("#catalog"), {
 const promptForm = new PromptForm(document.querySelector("#prompt-form"), {
   onSubmit: (prompt) => run(() => createJob({ mode: "prompt", prompt }), { title: "AI request" }),
 });
+const environments = new EnvironmentsPanel(document.querySelector("#environments"), {
+  onAction: async (project, action, environment) => {
+    const error = await run(() => runEnvironmentAction(project, action), { title: environment.title, templateId: environment.template_id });
+    if (error) showToast(error);
+  },
+  onLogs: null, // wired by the logs dialog (Task 11)
+  onRemove: (target) => removeDialog.open(target),
+  onFollow: (job, environment) => follow({ job: { ...job, project_name: environment.project }, context: { title: environment.title, templateId: environment.template_id } }),
+  onUpdate: (list) => {
+    const counts = new Map();
+    for (const environment of list) {
+      if (environment.template_id && LIVE_STATES.has(environment.state)) {
+        counts.set(environment.template_id, (counts.get(environment.template_id) ?? 0) + 1);
+      }
+    }
+    catalog.setRunningCounts(counts);
+  },
+});
 
 function setBusy(busy) {
   for (const button of document.querySelectorAll("[data-deploy]")) {
@@ -84,6 +111,7 @@ async function run(startJob, context) {
     activeJob = { job, context };
     follow(activeJob);
     revealStatus();
+    environments.refresh();
     return null;
   } catch (error) {
     return error instanceof ApiError ? error.message : "Unable to reach the EnvCrafter API. Check that it is running.";
@@ -94,13 +122,52 @@ async function run(startJob, context) {
 
 /** (Re)subscribe from the first event: the console rebuilds the whole view from the replay. */
 function follow({ job, context }) {
+  context.template ??= templatesById.get(context.templateId);
   // One job is displayed at a time. The previous one keeps running server-side.
   activeStream?.close();
+  activeJob = { job, context };
   statusConsole.start(job, context);
+  remember(job, context);
   activeStream = openJobStream(job.job_id, {
     onEvent: (event) => statusConsole.handle(event),
     onConnectionChange: (state) => statusConsole.setConnection(state),
   });
+}
+
+/** Keeps the currently displayed job in `sessionStorage`, so a reload can re-attach to it. */
+function remember(job, context) {
+  try {
+    sessionStorage.setItem(JOB_KEY, JSON.stringify({
+      job_id: job.job_id, title: context.title ?? null, template_id: context.template?.id ?? context.templateId ?? null,
+    }));
+  } catch {
+    /* storage unavailable (private mode): re-attach falls back to the active jobs */
+  }
+}
+
+/** After a reload: the job shown before (same tab), else the newest active job. */
+async function resumeJob() {
+  let saved = null;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(JOB_KEY) ?? "null");
+  } catch {
+    saved = null;
+  }
+  if (typeof saved?.job_id === "string") {
+    try {
+      const job = await fetchJob(saved.job_id);
+      follow({ job, context: { title: saved.title ?? undefined, templateId: saved.template_id } });
+      return;
+    } catch {
+      /* forgotten or unknown: fall through */
+    }
+  }
+  try {
+    const { jobs } = await fetchActiveJobs();
+    if (Array.isArray(jobs) && jobs[0]) follow({ job: jobs[0], context: {} });
+  } catch {
+    /* nothing to resume */
+  }
 }
 
 function deployTemplate(template, projectName = null) {
@@ -125,6 +192,8 @@ function updateChrome(next) {
   const text = HEADLINES[next.status]?.(next);
   document.title = text ? `${text} · ${BASE_TITLE}` : BASE_TITLE;
   refreshPill();
+  if (next.status !== lastStatus && TERMINAL.has(next.status)) environments.refresh();
+  lastStatus = next.status;
 }
 
 /** Floating shortcut to the status panel, shown only while the panel is out of view. */
@@ -150,6 +219,7 @@ async function loadCatalog() {
   try {
     const { categories, templates } = await fetchTemplates();
     categoryLabels = new Map(categories.map((category) => [category.id, category.label]));
+    templatesById = new Map(templates.map((template) => [template.id, template]));
     catalog.render(categories, templates);
     promptForm.showSuggestions(new Set(templates.map((template) => template.id)));
   } catch {
@@ -165,6 +235,8 @@ async function init() {
   document.querySelector("#engine-banner").hidden = capabilities.engine !== "simulated";
   promptForm.setAvailability(capabilities.llm_available, LLM_UNAVAILABLE);
   await loadCatalog();
+  environments.start();
+  await resumeJob();
 }
 
 init();

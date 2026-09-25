@@ -135,6 +135,23 @@ export class Catalog {
     this.grid.setAttribute("aria-busy", "false");
   }
 
+  /** "2 running" next to the category of each template with live environments. */
+  setRunningCounts(counts) {
+    for (const { template, card } of this.#entries) {
+      const count = counts.get(template.id) ?? 0;
+      let chip = card.querySelector(".running-count");
+      if (!count) {
+        chip?.remove();
+        continue;
+      }
+      if (!chip) {
+        chip = el("span", { className: "running-count" });
+        card.querySelector(".card-title").append(chip);
+      }
+      chip.textContent = `${count} running`;
+    }
+  }
+
   #select(category) {
     this.#category = category;
     for (const chip of this.filters.children) {
