@@ -7,6 +7,9 @@
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>EnvCrafter</title>
+  <!-- Suppresses the browser's automatic /favicon.ico request (and the console error it
+       causes when unhandled) without adding a binary asset or another server route. -->
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/css/styles.css">
   <script type="module" src="/js/main.js"></script>
 </head>
