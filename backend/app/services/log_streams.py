@@ -10,6 +10,9 @@ from app.workspace.manager import WorkspaceManager
 from app.workspace.renderer import compose_project_name
 
 REDACTED = "[redacted]"
+# Applied AFTER redaction, never before: capping first could cut a secret value in half,
+# leaving its surviving prefix unredacted (redact() only replaces an exact, whole match).
+MAX_LOG_LINE_LENGTH = 2000
 
 
 class UnknownLogSourceError(LookupError):
@@ -33,7 +36,8 @@ async def _redacted(
     lines: AsyncIterator[LogLine], secrets: Sequence[str]
 ) -> AsyncGenerator[LogLine, None]:
     async for line in lines:
-        yield LogLine(timestamp=line.timestamp, text=redact(line.text, secrets))
+        text = redact(line.text, secrets)[:MAX_LOG_LINE_LENGTH]
+        yield LogLine(timestamp=line.timestamp, text=text)
 
 
 class LogStreamer:

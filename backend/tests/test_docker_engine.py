@@ -1,6 +1,9 @@
-from collections.abc import Sequence
+import asyncio
+import logging
+from collections.abc import AsyncGenerator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -8,6 +11,7 @@ from app.engine.base import EngineError, LogLine, LogSink, ServiceStatus, StackH
 from app.engine.docker_compose import (
     DockerComposeEngine,
     _describe,
+    _drain_stderr,
     parse_log_line,
     parse_ps_output,
 )
@@ -188,5 +192,79 @@ def test_log_lines_are_parsed_and_sanitized() -> None:
     )
     assert parse_log_line("no timestamp here") == LogLine(timestamp=None, text="no timestamp here")
     assert parse_log_line("\n") is None
+    # Not length-capped here: capping is LogStreamer's job, after redaction (see
+    # test_logs.py) so that a secret straddling the cap can't leak its surviving prefix.
     long_line = parse_log_line("x" * 5000)
-    assert long_line is not None and len(long_line.text) == 2000
+    assert long_line is not None and len(long_line.text) == 5000
+
+
+async def _aiter(items: list[bytes]) -> AsyncGenerator[bytes, None]:
+    for item in items:
+        await asyncio.sleep(0)  # a real pipe read suspends; give other tasks a turn too
+        yield item
+
+
+class _FakeProcess:
+    """Stands in for `asyncio.subprocess.Process`: no real subprocess is spawned."""
+
+    def __init__(self, *, stdout: list[bytes], stderr: list[bytes], returncode: int) -> None:
+        self.stdout = _aiter(stdout)
+        self.stderr = _aiter(stderr)
+        self._returncode = returncode
+        self.returncode: int | None = None
+        self.killed = False
+
+    async def wait(self) -> int:
+        await asyncio.sleep(0)  # a real `wait()` suspends until the process actually exits
+        self.returncode = self._returncode
+        return self._returncode
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+@pytest.mark.anyio
+async def test_drain_stderr_logs_bounded_lines_server_side(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    long_line = ("x" * 1000).encode()
+    process = _FakeProcess(stdout=[], stderr=[b"short warning\n", long_line + b"\n"], returncode=0)
+
+    with caplog.at_level(logging.WARNING):
+        await _drain_stderr(process, "demo", "app")  # type: ignore[arg-type]
+
+    messages = [record.message for record in caplog.records]
+    assert any("short warning" in message for message in messages)
+    assert all(len(message) < 400 for message in messages), messages
+
+
+@pytest.mark.anyio
+async def test_logs_keeps_stderr_out_of_the_client_stream_and_logs_it_server_side(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    process = _FakeProcess(
+        stdout=[b"2026-09-24T20:34:45.000000000Z hello\n"],
+        stderr=[b"unable to reach tcp://socket-proxy-api:2375: connection refused\n"],
+        returncode=1,
+    )
+    captured_kwargs: dict[str, Any] = {}
+
+    async def fake_create_subprocess_exec(*args: Any, **kwargs: Any) -> _FakeProcess:
+        captured_kwargs.update(kwargs)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    engine = _engine()
+
+    with caplog.at_level(logging.WARNING):
+        lines = [line async for line in engine.logs(_stack(tmp_path), "app", tail=10)]
+
+    # stderr is on its own pipe, never merged into the stream the caller reads.
+    assert captured_kwargs["stderr"] == asyncio.subprocess.PIPE
+    # Only container output (stdout) reaches the caller; stderr never does.
+    assert [line.text for line in lines] == ["hello"]
+    server_log = "\n".join(record.message for record in caplog.records)
+    assert "socket-proxy-api" in server_log
+    assert "connection refused" in server_log
+    assert "exited with code 1" in server_log
+    assert not process.killed  # the process exited on its own; nothing to kill

@@ -8,7 +8,12 @@ from starlette.websockets import WebSocketDisconnect
 from app.core.config import Settings
 from app.engine.base import LogLine, StackHandle
 from app.engine.simulated import SimulatedEngine
-from app.services.log_streams import LogStreamer, TooManyLogStreamsError, redact
+from app.services.log_streams import (
+    MAX_LOG_LINE_LENGTH,
+    LogStreamer,
+    TooManyLogStreamsError,
+    redact,
+)
 from app.workspace.manager import WorkspaceManager
 from tests.conftest import ClientFactory, run_job
 
@@ -126,6 +131,15 @@ def _workspace(root: Path) -> WorkspaceManager:
     return WorkspaceManager(root)
 
 
+def _workspace_with_secret(root: Path, secret: str) -> WorkspaceManager:
+    (root / "demo").mkdir(parents=True)
+    (root / "demo" / "compose.yaml").write_text(
+        "name: ec-demo\nservices:\n  app:\n    image: busybox\n", encoding="utf-8"
+    )
+    (root / "demo" / ".env").write_text(f"EC_PROJECT=demo\nAPP_TOKEN={secret}\n", encoding="utf-8")
+    return WorkspaceManager(root)
+
+
 @pytest.mark.anyio
 async def test_streamer_releases_its_slot(tmp_path: Path) -> None:
     streamer = LogStreamer(
@@ -142,3 +156,50 @@ async def test_streamer_releases_its_slot(tmp_path: Path) -> None:
 
 def test_secret_values_exclude_builtin_variables(tmp_path: Path) -> None:
     assert _workspace(tmp_path).read_secret_values("demo") == ["abcdefghijkl"]
+
+
+@pytest.mark.anyio
+async def test_streamer_caps_line_length(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    long_text = "x" * 5000
+
+    async def long_logs(
+        self: SimulatedEngine, stack: StackHandle, service: str, *, tail: int
+    ) -> AsyncGenerator[LogLine, None]:
+        yield LogLine(timestamp=None, text=long_text)
+
+    monkeypatch.setattr(SimulatedEngine, "logs", long_logs)
+    streamer = LogStreamer(
+        workspaces=_workspace(tmp_path), engine=SimulatedEngine(delay=0), max_streams=1
+    )
+    async with streamer.open("demo", "app", tail=1) as lines:
+        line = await anext(lines)
+
+    assert len(line.text) == MAX_LOG_LINE_LENGTH
+
+
+@pytest.mark.anyio
+async def test_streamer_redacts_a_secret_straddling_the_length_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 25-character secret starting at index 1990 straddles the 2000-character cap:
+    # capping before redaction would leave its first 10 characters ("[0:10]") exposed.
+    secret = "TOPSECRETVALUE1234567890"  # noqa: S105 - a test fixture value, not a real secret
+    text = ("x" * 1990) + secret + ("y" * 500)
+
+    async def leaky_logs(
+        self: SimulatedEngine, stack: StackHandle, service: str, *, tail: int
+    ) -> AsyncGenerator[LogLine, None]:
+        yield LogLine(timestamp=None, text=text)
+
+    monkeypatch.setattr(SimulatedEngine, "logs", leaky_logs)
+    streamer = LogStreamer(
+        workspaces=_workspace_with_secret(tmp_path, secret),
+        engine=SimulatedEngine(delay=0),
+        max_streams=1,
+    )
+    async with streamer.open("demo", "app", tail=1) as lines:
+        line = await anext(lines)
+
+    assert secret not in line.text
+    assert secret[:10] not in line.text
+    assert len(line.text) <= MAX_LOG_LINE_LENGTH

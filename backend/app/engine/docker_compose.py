@@ -10,6 +10,7 @@ Security properties:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -45,7 +46,6 @@ _TIMESTAMP_RE = re.compile(
 # sequences only, on purpose: this source file must never carry a raw control
 # or bidi character (verify with a Unicode category scan after editing).
 _CONTROL_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
-_MAX_LOG_LINE = 2000
 
 
 class DockerComposeEngine:
@@ -198,21 +198,36 @@ class DockerComposeEngine:
             ),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+            # Kept apart from stdout: the compose CLI's own warnings and errors (upstream
+            # messages, socket-proxy addresses, file paths) are for the server log only,
+            # never for the browser. Drained concurrently so a chatty stderr can never
+            # fill its pipe buffer and stall the container output this generator yields.
+            stderr=asyncio.subprocess.PIPE,
             env=self._environment(),
             limit=1024 * 1024,
         )
+        stderr_task = asyncio.create_task(_drain_stderr(process, stack.project, service))
         try:
             if process.stdout is not None:
                 async for raw in process.stdout:
                     line = parse_log_line(raw.decode("utf-8", "replace"))
                     if line is not None:
                         yield line
-            await process.wait()
+            code = await process.wait()
+            if code != 0:
+                logger.warning(
+                    "`docker compose logs --follow` for %s/%s exited with code %d",
+                    stack.project,
+                    service,
+                    code,
+                )
         finally:
             if process.returncode is None:  # the viewer left: stop following
                 process.kill()
                 await process.wait()
+            stderr_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stderr_task
 
     # --- Internals --------------------------------------------------------------
 
@@ -325,7 +340,13 @@ def parse_ps_output(output: str) -> dict[str, list[ServiceStatus]]:
 
 
 def parse_log_line(text: str) -> LogLine | None:
-    """One `docker compose logs --timestamps` line, without colors or control characters."""
+    """One `docker compose logs --timestamps` line, without colors or control characters.
+
+    Not length-capped here: the reader already bounds a line to 1 MiB (`logs()`'s
+    `limit=`), and capping before `LogStreamer` redacts secret values could truncate a
+    secret mid-match, leaving its surviving prefix unredacted in the browser. The
+    display-facing cap is applied by `LogStreamer`, after redaction.
+    """
     text = _CONTROL_RE.sub("", _ANSI_RE.sub("", text.rstrip("\r\n")))
     if not text.strip():
         return None
@@ -334,7 +355,7 @@ def parse_log_line(text: str) -> LogLine | None:
     if match:
         timestamp = _parse_timestamp(match.group(1))
         text = match.group(2)
-    return LogLine(timestamp=timestamp, text=text[:_MAX_LOG_LINE])
+    return LogLine(timestamp=timestamp, text=text)
 
 
 def _parse_timestamp(value: str) -> datetime | None:
@@ -344,6 +365,20 @@ def _parse_timestamp(value: str) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+async def _drain_stderr(process: asyncio.subprocess.Process, project: str, service: str) -> None:
+    """Log `docker compose logs --follow`'s own stderr server-side only: paths and
+    upstream errors must never reach the browser (CLAUDE.md). Runs concurrently with
+    the caller reading stdout so a chatty stderr can never fill its pipe buffer and
+    stall container output; cancelled from `logs()`'s `finally` once streaming stops.
+    """
+    if process.stderr is None:
+        return
+    async for raw in process.stderr:
+        line = raw.decode("utf-8", "replace").rstrip("\r\n")[:_MAX_LINE]
+        if line:
+            logger.warning("docker compose logs (%s/%s) stderr: %s", project, service, line)
 
 
 _VERBS = ("pull", "up", "down", "stop", "logs", "ps", "connect", "disconnect", "inspect")

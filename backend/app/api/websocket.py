@@ -61,27 +61,39 @@ async def _race(websocket: WebSocket, producer: Coroutine[Any, Any, None]) -> _O
 
     The listener notices a closed tab at once instead of on the next send(), which may
     be minutes away; cancelling the producer runs its cleanup (unsubscribe, kill...).
+
+    This coroutine can itself be cancelled from outside (server shutdown, or an ASGI
+    server tearing the connection down). `asyncio.gather(*pending)` must NOT be used to
+    await that cancellation: when the caller is cancelled while awaiting it, `gather`
+    re-raises a bare `CancelledError()` that has lost the cancel scope's own marker, so
+    an enclosing anyio scope fails to recognise it as its own and never absorbs it, while
+    `_race` has already returned as if the producer's own cleanup had finished — racing
+    that cleanup (e.g. `LogStreamer.open()`'s `aclose()` of the log generators) against
+    whatever the producer's task is still doing with them. `asyncio.wait()` never raises
+    a child's exception, only ours if we are cancelled while awaiting it, so we drain with
+    it instead: keep awaiting until both tasks genuinely report `done()`, remembering the
+    latest cancellation (a cancelled scope keeps re-delivering it on every tick until the
+    task ends) instead of stopping early, and only then re-raise it, once every task's own
+    `finally`/`aclosing` cleanup is guaranteed to have already run.
     """
     sender = asyncio.create_task(producer)
     listener = asyncio.create_task(_wait_for_client_exit(websocket))
+    tasks = {sender, listener}
+    cancelled: asyncio.CancelledError | None = None
+    done: set[asyncio.Task[Any]] = set()
     try:
-        done, pending = await asyncio.wait({sender, listener}, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-    except asyncio.CancelledError:
-        # This coroutine was itself cancelled from outside (the ASGI server tearing down
-        # the connection, e.g. a test client whose teardown forces the handler to stop
-        # right after it hands us the disconnect it already queued): request cancellation
-        # of both tasks and return at once, with nothing left to send back since the
-        # transport is already gone. Do NOT await anything else here: the enclosing scope
-        # keeps re-delivering this same cancellation to us on every checkpoint until we
-        # stop awaiting entirely, so any further `await` in this handler would just be
-        # cancelled again. Each task still runs its own `finally`/`aclosing` cleanup on
-        # its own schedule once the event loop gets back to it.
-        sender.cancel()
-        listener.cancel()
-        return _Outcome(client_left=True, close_code=None, error=None)
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError as exc:
+        cancelled = exc
+    for task in tasks:
+        task.cancel()
+    while not all(task.done() for task in tasks):
+        try:
+            await asyncio.wait(tasks)  # unlike gather(), never re-raises a child's CancelledError
+        except asyncio.CancelledError as exc:  # anyio re-delivers every tick: keep draining
+            cancelled = exc
+    if cancelled is not None:
+        raise cancelled
     if listener in done:
         return _Outcome(client_left=True, close_code=listener.result(), error=None)
     return _Outcome(client_left=False, close_code=None, error=sender.exception())
