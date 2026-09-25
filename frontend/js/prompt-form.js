@@ -22,6 +22,8 @@ export class PromptForm {
     this.counter = form.querySelector("#prompt-counter");
     this.error = form.querySelector("#prompt-error");
     this.suggestions = form.querySelector("#prompt-suggestions");
+    this.submitButton = form.querySelector('button[type="submit"]');
+    this.unavailable = form.querySelector("#prompt-unavailable");
     form.querySelector("#shortcut-modifier").textContent = IS_MAC ? "⌘" : "Ctrl";
 
     this.input.addEventListener("input", () => {
@@ -41,8 +43,20 @@ export class PromptForm {
     });
   }
 
+  /** Disables the form, with the reason, when the server cannot serve natural-language requests. */
+  setAvailability(available, reason = "") {
+    this.input.disabled = !available;
+    this.submitButton.disabled = !available;
+    // main.js re-enables [data-deploy] buttons after each request: this flag keeps it off.
+    this.submitButton.toggleAttribute("data-unavailable", !available);
+    this.unavailable.textContent = available ? "" : reason;
+    this.unavailable.hidden = available;
+    if (!available) this.suggestions.hidden = true;
+  }
+
   /** @param {Set<string>} templateIds ids present in the catalog */
   showSuggestions(templateIds) {
+    if (this.input.disabled) return;
     const buttons = SUGGESTIONS.filter((suggestion) => templateIds.has(suggestion.templateId)).map(
       ({ text }) => {
         const button = el("button", { className: "suggestion", text, attrs: { type: "button" } });

@@ -14,6 +14,7 @@
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>EnvCrafter</div>
     <p class="tagline">On-demand, isolated, self-hosted environments</p>
+    <p id="engine-banner" class="engine-banner" hidden>Simulated engine: deployments are rehearsed, nothing runs in Docker.</p>
   </header>
 
   <main class="layout">
@@ -27,6 +28,7 @@
                     placeholder="e.g. Deploy a test ITSM environment with a service desk and asset inventory"></textarea>
           <div id="prompt-suggestions" class="suggestions" role="group" aria-label="Example requests" hidden></div>
           <p id="prompt-error" class="inline-alert" role="alert" hidden></p>
+          <p id="prompt-unavailable" class="hint prompt-unavailable" hidden></p>
           <div class="prompt-actions">
             <p id="prompt-hints" class="prompt-hints hint">
               <span>Any language works</span>

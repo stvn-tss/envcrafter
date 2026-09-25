@@ -1,21 +1,35 @@
 /**
- * Environment naming and URL rules shared by the dialogs and the status console.
- *
- * PROJECT_NAME mirrors PROJECT_NAME_PATTERN (backend/app/models/common.py). It only
- * gives instant feedback while typing: the API stays the authority.
+ * Environment naming and URL rules shared by the dialogs, the dashboard and the status console.
+ * Both rules come from GET /api/config: the API stays the authority, the UI only gives
+ * instant feedback.
  */
-export const PROJECT_NAME = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
+import { config } from "./config.js";
 
-// Only links EnvCrafter itself generates are rendered clickable: http://<slug>.localhost
-// (a server-provided href is still untrusted: this also rules out `javascript:` URLs).
-export const ENVIRONMENT_URL = /^http:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.localhost$/;
+const DEFAULT_PROJECT_NAME = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
+
+export function projectNamePattern() {
+  try {
+    return new RegExp(config().project_name_pattern);
+  } catch {
+    return DEFAULT_PROJECT_NAME;
+  }
+}
+
+/**
+ * Only links EnvCrafter itself generates are rendered clickable: http://<slug>(.<slug>)*.<domain>.
+ * A server-provided href is still untrusted: this also rules out `javascript:` URLs.
+ */
+export function isEnvironmentUrl(url) {
+  const domain = config().public_domain.replaceAll(".", "\\.");
+  return typeof url === "string" && new RegExp(`^http://[a-z0-9-]+(\\.[a-z0-9-]+)*\\.${domain}$`).test(url);
+}
 
 // Placeholder used by the catalog in host names ("<project>.localhost") and access notes.
 const PROJECT_TOKEN = "<project>";
 
 /** User-facing reason why a typed project name is refused, or null when it is valid or empty. */
 export function projectNameProblem(name) {
-  if (name === "" || PROJECT_NAME.test(name)) return null;
+  if (name === "" || projectNamePattern().test(name)) return null;
   if (!/^[a-z0-9-]*$/.test(name)) return "Use only lowercase letters, digits and hyphens.";
   if (!/^[a-z]/.test(name)) return "Start with a lowercase letter.";
   if (name.length < 3) return "Use at least 3 characters.";

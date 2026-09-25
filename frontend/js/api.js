@@ -20,6 +20,13 @@ export async function fetchTemplates() {
   return response.json();
 }
 
+/** Server capabilities: engine, LLM availability, public domain, project name rule. */
+export async function fetchConfig() {
+  const response = await fetch("/api/config");
+  if (!response.ok) throw new ApiError(await readError(response));
+  return response.json();
+}
+
 /** Starts a deployment. Resolves with the job summary (HTTP 202). */
 export async function createJob(payload) {
   const response = await fetch("/api/jobs", {

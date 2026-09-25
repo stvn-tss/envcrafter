@@ -2,12 +2,43 @@
 import { el } from "./dom.js";
 import { icon } from "./icons.js";
 
-/**
- * The image allow-list flags intentionally vulnerable images, but the API does not
- * expose that flag yet: the curated `vulnerable` manifest tag stands in for it.
- */
+/** The allow-list flags intentionally vulnerable images; the API exposes it per template. */
 export function isVulnerable(template) {
-  return template.tags.includes("vulnerable");
+  return template.vulnerable === true;
+}
+
+export function formatMegabytes(mb) {
+  return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`;
+}
+
+function formatSeconds(seconds) {
+  return seconds >= 90 ? `${Math.round(seconds / 60)} min` : `${seconds} s`;
+}
+
+/** "454 MB download · 350 MB RAM · first start ~2 min": approximate, from the manifest. */
+export function footprintItems(template) {
+  const footprint = template.footprint;
+  if (!footprint) return [];
+  return [
+    `${formatMegabytes(footprint.download_mb)} download`,
+    `${formatMegabytes(footprint.memory_mb)} RAM`,
+    `first start ~${formatSeconds(footprint.first_start_seconds)}`,
+  ];
+}
+
+const LOGO_URL = /^\/api\/templates\/[a-z0-9-]+\/logo$/;
+
+/** The application logo when the template ships one, else the category monogram. */
+export function appIcon(template, size = "") {
+  const fallback = monogram(template, size);
+  if (typeof template.logo_url !== "string" || !LOGO_URL.test(template.logo_url)) return fallback;
+  const pixels = size === "large" ? "48" : "40";
+  const image = el("img", {
+    className: size ? `app-logo ${size}` : "app-logo",
+    attrs: { src: template.logo_url, alt: "", width: pixels, height: pixels, decoding: "async" },
+  });
+  image.addEventListener("error", () => image.replaceWith(fallback), { once: true });
+  return image;
 }
 
 /** Initials in the category color, standing in for the application logo. */
@@ -142,7 +173,7 @@ export class Catalog {
     const flags = templateFlags(template);
     const card = el("article", { className: "template-card", attrs: { "data-category": template.category } }, [
       el("div", { className: "card-head" }, [
-        monogram(template),
+        appIcon(template),
         el("div", { className: "card-title" }, [
           el("h3", { text: template.name }),
           categoryTag(template.category, this.categoryLabel(template.category)),
@@ -154,6 +185,7 @@ export class Catalog {
         { className: "inline-list", attrs: { "aria-label": "Components" } },
         template.components.map((component) => el("li", { text: component.name })),
       ),
+      el("ul", { className: "inline-list footprint", attrs: { "aria-label": "Approximate footprint" } }, footprintItems(template).map((text) => el("li", { text }))),
       ...(flags ? [flags] : []),
       el("div", { className: "card-actions" }, [detailsButton, deployButton]),
     ]);

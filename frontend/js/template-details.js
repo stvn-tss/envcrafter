@@ -4,7 +4,7 @@
  * plus an optional project name before deploying.
  * Everything comes from /api/templates and is rendered with textContent only.
  */
-import { categoryTag, isVulnerable, monogram } from "./catalog.js";
+import { appIcon, categoryTag, footprintItems, isVulnerable } from "./catalog.js";
 import { copyButton } from "./clipboard.js";
 import { el } from "./dom.js";
 import { autoProjectName, projectNameProblem, webUrl } from "./environment.js";
@@ -53,7 +53,7 @@ export class TemplateDetails {
     this.deployButton.disabled = false;
 
     this.heading.replaceChildren(
-      monogram(template, "large"),
+      appIcon(template, "large"),
       el("div", {}, [
         el("h2", { text: template.name, attrs: { id: "dialog-title" } }),
         categoryTag(template.category, this.categoryLabel(template.category)),
@@ -67,6 +67,10 @@ export class TemplateDetails {
       section("Web access", this.#accessSection),
       section("Network", networkSummary(template)),
       section("Persistent storage", volumesList(template.volumes)),
+      section("Footprint", el("div", {}, [
+        el("ul", { className: "inline-list" }, footprintItems(template).map((text) => el("li", { text }))),
+        el("p", { className: "hint access-note", text: "Approximate, measured on linux/amd64. First start assumes images are already downloaded." }),
+      ])),
       ...(template.access_notes.length
         ? [section("Good to know", el("ul", { className: "notes" }, template.access_notes.map((note) => el("li", { text: note }))))]
         : []),

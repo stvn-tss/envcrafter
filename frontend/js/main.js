@@ -1,6 +1,7 @@
 /** Entry point: wires the catalog, the request form, the dialogs and the status console. */
 import { ApiError, createJob, fetchTemplates, removeEnvironment } from "./api.js";
 import { Catalog } from "./catalog.js";
+import { loadConfig } from "./config.js";
 import { icon } from "./icons.js";
 import { openJobStream } from "./job-stream.js";
 import { PromptForm } from "./prompt-form.js";
@@ -26,9 +27,16 @@ const categoryLabel = (id) => categoryLabels.get(id) ?? id;
 const HEADLINES = {
   deploying: ({ project, done, total }) => `Deploying ${project}${total ? ` (${done}/${total})` : ""}`,
   removing: ({ project }) => `Removing ${project}`,
+  stopping: ({ project }) => `Stopping ${project}`,
+  starting: ({ project }) => `Starting ${project}`,
+  restarting: ({ project }) => `Restarting ${project}`,
+  planning: () => "Analyzing request",
   ready: ({ project }) => `✓ ${project} ready`,
   removed: ({ project }) => `✓ ${project} removed`,
-  failed: ({ project }) => `✕ ${project} failed`,
+  stopped: ({ project }) => `✓ ${project} stopped`,
+  running: ({ project }) => `✓ ${project} running`,
+  planned: () => "✓ Plan ready",
+  failed: ({ project }) => (project ? `✕ ${project} failed` : "✕ Analysis failed"),
 };
 
 // Icons declared in the markup: <button data-icon="close">.
@@ -59,7 +67,9 @@ const promptForm = new PromptForm(document.querySelector("#prompt-form"), {
 });
 
 function setBusy(busy) {
-  for (const button of document.querySelectorAll("[data-deploy]")) button.disabled = busy;
+  for (const button of document.querySelectorAll("[data-deploy]")) {
+    button.disabled = busy || button.hasAttribute("data-unavailable");
+  }
 }
 
 /**
@@ -112,18 +122,18 @@ function revealStatus() {
 
 function updateChrome(next) {
   summary = next;
-  const headline = HEADLINES[next.status];
-  document.title = headline && next.project ? `${headline(next)} · ${BASE_TITLE}` : BASE_TITLE;
+  const text = HEADLINES[next.status]?.(next);
+  document.title = text ? `${text} · ${BASE_TITLE}` : BASE_TITLE;
   refreshPill();
 }
 
 /** Floating shortcut to the status panel, shown only while the panel is out of view. */
 function refreshPill() {
-  const headline = summary && HEADLINES[summary.status];
-  jobPill.hidden = statusInView || !headline || !summary.project;
+  const text = summary && HEADLINES[summary.status]?.(summary);
+  jobPill.hidden = statusInView || !text;
   if (jobPill.hidden) return;
   jobPill.dataset.tone = STATUS[summary.status].tone;
-  jobPillText.textContent = headline(summary);
+  jobPillText.textContent = text;
 }
 
 new IntersectionObserver(([entry]) => {
@@ -147,4 +157,14 @@ async function loadCatalog() {
   }
 }
 
-loadCatalog();
+const LLM_UNAVAILABLE =
+  "Natural-language requests are turned off on this server: set ENVCRAFTER_LLM_API_KEY to enable them.";
+
+async function init() {
+  const capabilities = await loadConfig();
+  document.querySelector("#engine-banner").hidden = capabilities.engine !== "simulated";
+  promptForm.setAvailability(capabilities.llm_available, LLM_UNAVAILABLE);
+  await loadCatalog();
+}
+
+init();

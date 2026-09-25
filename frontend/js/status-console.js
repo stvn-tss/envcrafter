@@ -9,7 +9,7 @@
  */
 import { copyButton, copyText } from "./clipboard.js";
 import { el } from "./dom.js";
-import { ENVIRONMENT_URL, isMainHost, webUrl, withProject } from "./environment.js";
+import { isEnvironmentUrl, isMainHost, webUrl, withProject } from "./environment.js";
 import { icon } from "./icons.js";
 import { showToast } from "./toasts.js";
 
@@ -22,8 +22,15 @@ export const STATUS = {
   idle: { label: "Idle", tone: "idle" },
   deploying: { label: "Deploying", tone: "running" },
   removing: { label: "Removing", tone: "running" },
+  stopping: { label: "Stopping", tone: "running" },
+  starting: { label: "Starting", tone: "running" },
+  restarting: { label: "Restarting", tone: "running" },
+  planning: { label: "Analyzing", tone: "running" },
   ready: { label: "Ready", tone: "succeeded" },
   removed: { label: "Removed", tone: "succeeded" },
+  stopped: { label: "Stopped", tone: "succeeded" },
+  running: { label: "Running", tone: "succeeded" },
+  planned: { label: "Plan ready", tone: "succeeded" },
   failed: { label: "Failed", tone: "failed" },
 };
 
@@ -33,6 +40,25 @@ const CONNECTION_NOTES = {
   failed: { text: "Live updates stopped.", retry: true },
   rejected: { text: "Live updates are no longer available for this job.", retry: false },
 };
+
+// Drives the title, the started/finished announcements and the terminal status per job mode.
+const deployment = {
+  active: "deploying",
+  done: "ready",
+  title: (job, context) => `${context.title ?? "Deployment"} → ${job.project_name}`,
+  started: (job) => `Deployment of ${job.project_name} started.`,
+};
+const MODES = {
+  template: deployment,
+  prompt: deployment,
+  plan: deployment,
+  removal: { active: "removing", done: "removed", title: (job) => `Removal of ${job.project_name}`, started: (job) => `Removal of ${job.project_name} started.` },
+  stop: { active: "stopping", done: "stopped", title: (job) => `Stop of ${job.project_name}`, started: (job) => `Stop of ${job.project_name} started.` },
+  start: { active: "starting", done: "running", title: (job) => `Start of ${job.project_name}`, started: (job) => `Start of ${job.project_name} started.` },
+  restart: { active: "restarting", done: "running", title: (job) => `Restart of ${job.project_name}`, started: (job) => `Restart of ${job.project_name} started.` },
+  planning: { active: "planning", done: "planned", title: () => "AI analysis", started: () => "Analysis of the request started." },
+};
+const modeOf = (job) => MODES[job?.mode] ?? deployment;
 
 /** 850 -> "0.9s" (precise), 42_000 -> "42s", 125_000 -> "2m 05s". */
 export function formatDuration(ms, precise = false) {
@@ -64,11 +90,13 @@ export class StatusConsole {
 
   /**
    * @param {{ onRemove: (target: { project: string, volumes: string[] | null }) => void,
-   *           onReconnect: () => void, onChange: (summary: object) => void }} actions
+   *           onReconnect: () => void, onChange: (summary: object) => void,
+   *           onReviewPlan: (planId: string) => void }} actions
    */
-  constructor(root, { onRemove, onReconnect, onChange }) {
+  constructor(root, { onRemove, onReconnect, onChange, onReviewPlan }) {
     this.onRemove = onRemove;
     this.onChange = onChange;
+    this.onReviewPlan = onReviewPlan;
     this.badge = root.querySelector("#status-badge");
     this.connectionNote = root.querySelector("#connection-note");
     this.connectionText = root.querySelector("#connection-text");
@@ -113,18 +141,16 @@ export class StatusConsole {
     this.result.hidden = true;
     delete this.result.dataset.outcome;
     delete this.progress.dataset.outcome;
-    this.title.textContent =
-      job.mode === "removal" ? `Removal of ${job.project_name}` : `${context.title ?? "Deployment"} → ${job.project_name}`;
+    const mode = modeOf(job);
+    this.title.textContent = mode.title(job, context);
     this.elapsed.textContent = "";
     this.progressLabel.textContent = "Waiting for the plan…";
     this.#setPercent(0, "Waiting for the plan");
     this.setConnection("connecting");
     this.empty.hidden = true;
     this.view.hidden = false;
-    this.#setStatus(job.mode === "removal" ? "removing" : "deploying");
-    this.#announce(
-      job.mode === "removal" ? `Removal of ${job.project_name} started.` : `Deployment of ${job.project_name} started.`,
-    );
+    this.#setStatus(mode.active);
+    this.#announce(mode.started(job));
   }
 
   setConnection(state) {
@@ -139,7 +165,7 @@ export class StatusConsole {
   handle(event) {
     const at = parseTime(event.timestamp);
     this.#startedAt ??= at;
-    this.#record(event, at);
+    if (event.type !== "step.progress") this.#record(event, at);
     switch (event.type) {
       case "job.accepted":
         this.#renderPlan(Array.isArray(event.plan) ? event.plan : []);
@@ -149,6 +175,9 @@ export class StatusConsole {
         break;
       case "step.log":
         this.#stepLog(event, at, "detail");
+        break;
+      case "step.progress":
+        this.#stepProgress(event);
         break;
       case "step.completed":
         this.#stepEnded(event, at, "done");
@@ -202,7 +231,7 @@ export class StatusConsole {
 
     const view = {
       label: step.label, index, item, toggle, meta, preview, logs, list, jump,
-      state: "pending", startedAt: null, endedAt: null, lastLine: "", expanded: false,
+      state: "pending", startedAt: null, endedAt: null, lastLine: "", expanded: false, percent: null,
     };
     toggle.addEventListener("click", () => this.#setExpanded(view, !view.expanded));
     list.addEventListener("scroll", () => {
@@ -258,6 +287,17 @@ export class StatusConsole {
     this.#refreshPreview(view);
   }
 
+  /** Measurable progress of the running step: percent in the meta, message as preview. */
+  #stepProgress(event) {
+    const view = this.#steps.get(event.step_key);
+    if (!view) return; // unknown step (e.g. partial replay): ignore safely
+    view.percent = Number.isInteger(event.percent) ? Math.min(Math.max(event.percent, 0), 100) : null;
+    if (typeof event.message === "string" && event.message) view.lastLine = event.message;
+    this.#refreshStepMeta(view);
+    this.#refreshPreview(view);
+    this.#refreshProgress();
+  }
+
   #setStepState(view, state) {
     view.state = state;
     view.item.dataset.state = state;
@@ -291,7 +331,7 @@ export class StatusConsole {
       view.startedAt && end ? formatDuration(end - view.startedAt, view.state !== "running") : "";
     const text = {
       pending: "pending",
-      running: `in progress · ${duration(new Date())}`,
+      running: `in progress${view.percent === null ? "" : ` · ${view.percent}%`} · ${duration(new Date())}`,
       done: `done · ${duration(view.endedAt)}`,
       failed: `failed · ${duration(view.endedAt)}`,
     }[view.state];
@@ -312,7 +352,10 @@ export class StatusConsole {
     const label =
       `${counts.done} of ${total} steps done` + (counts.failed ? ` · ${counts.failed} failed` : "");
     this.progressLabel.textContent = label;
-    this.#setPercent(((counts.done + counts.running * 0.5) / (total || 1)) * 100, label);
+    const running = [...this.#steps.values()]
+      .filter((step) => step.state === "running")
+      .reduce((sum, step) => sum + (step.percent === null ? 0.5 : step.percent / 100), 0);
+    this.#setPercent(((counts.done + running) / (total || 1)) * 100, label);
     this.#notify();
   }
 
@@ -326,10 +369,9 @@ export class StatusConsole {
   #finish(outcome, event, at) {
     this.#endedAt = at;
     this.#stopTimer();
-    const removal = this.#job?.mode === "removal";
     if (outcome === "success") this.#setPercent(100, "Completed");
     this.progress.dataset.outcome = outcome;
-    this.#setStatus(outcome === "success" ? (removal ? "removed" : "ready") : "failed");
+    this.#setStatus(outcome === "success" ? modeOf(this.#job).done : "failed");
     this.#refreshElapsed();
 
     this.result.dataset.outcome = outcome;
@@ -352,7 +394,8 @@ export class StatusConsole {
       return children;
     }
     const project = this.#job?.project_name;
-    if (this.#job?.mode === "removal" || !project) return children;
+    if (["removal", "stop"].includes(this.#job?.mode) || !project) return children;
+    if (this.#job?.mode === "planning") return children;
 
     const template = this.#context.template ?? null;
     const urls = this.#environmentUrls(event, project, template);
@@ -383,6 +426,11 @@ export class StatusConsole {
 
   /** Every web UI of the environment, main one first. Only EnvCrafter-shaped URLs pass. */
   #environmentUrls(event, project, template) {
+    if (Array.isArray(event.urls) && event.urls.length) {
+      return event.urls
+        .filter((item) => typeof item?.name === "string" && isEnvironmentUrl(item?.url))
+        .map((item, index) => ({ name: item.name, url: item.url, main: index === 0 }));
+    }
     const urls = template
       ? template.components
           .filter((component) => component.web_access)
@@ -395,7 +443,7 @@ export class StatusConsole {
       : typeof event.url === "string"
         ? [{ name: "Web interface", url: event.url, main: true }]
         : [];
-    return urls.filter(({ url }) => ENVIRONMENT_URL.test(url));
+    return urls.filter(({ url }) => isEnvironmentUrl(url));
   }
 
   // ---- Status, time, logs ----------------------------------------------------------
