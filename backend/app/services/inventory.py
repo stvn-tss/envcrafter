@@ -3,6 +3,8 @@
 `meta.json` records intent; the engine reports reality through container labels.
 One engine call serves every project, and concurrent callers share it for
 `cache_seconds` (single-flight), so several polling tabs never multiply `docker ps`.
+The cache key includes the active job ids, so a job starting or ending always forces
+a fresh engine read instead of serving a stale state until the cache expires.
 """
 
 import asyncio
@@ -11,6 +13,7 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
+from uuid import UUID
 
 from app.engine.base import EngineError, ServiceStatus, StackHandle
 from app.models.common import DEPLOY_MODES
@@ -60,6 +63,10 @@ class _Record:
     stack: StackHandle
 
 
+# Projects observed, plus the active job ids: either changing invalidates the cache.
+_CacheKey = tuple[frozenset[str], frozenset[UUID]]
+
+
 class EnvironmentInventory:
     def __init__(
         self,
@@ -74,9 +81,7 @@ class EnvironmentInventory:
         self._jobs = jobs
         self._cache_seconds = cache_seconds
         self._lock = asyncio.Lock()
-        self._cache: tuple[float, frozenset[str], dict[str, list[ServiceStatus]] | None] | None = (
-            None
-        )
+        self._cache: tuple[float, _CacheKey, dict[str, list[ServiceStatus]] | None] | None = None
 
     def _load_records(self) -> list[_Record]:
         records: list[_Record] = []
@@ -95,7 +100,10 @@ class EnvironmentInventory:
 
     async def _observe(self, stacks: list[StackHandle]) -> dict[str, list[ServiceStatus]] | None:
         """Engine state for these stacks, or None when the engine cannot be queried."""
-        key = frozenset(stack.project for stack in stacks)
+        key: _CacheKey = (
+            frozenset(stack.project for stack in stacks),
+            frozenset(job.id for job in self._jobs.list_jobs(active_only=True)),
+        )
         async with self._lock:
             if self._cache is not None:
                 at, cached_key, cached = self._cache

@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,8 +9,10 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.engine.base import EngineError, ServiceStatus, StackHandle
 from app.engine.simulated import SimulatedEngine
+from app.models.deployment import JobStatus
 from app.models.environment import EnvironmentState
 from app.services.inventory import EnvironmentInventory, summarize_state
+from app.services.orchestrator import Job
 from app.workspace.manager import WorkspaceManager
 from tests.conftest import collect_events, run_job
 
@@ -179,3 +182,44 @@ async def test_engine_status_is_shared_between_close_refreshes(tmp_path: Path) -
     _workspace(tmp_path, "other")  # a new project invalidates the cached snapshot
     assert len(await inventory.list()) == 2
     assert engine.calls == 2
+
+
+class _MutableJobs:
+    """Fake `JobDirectory` whose active jobs the test can change between calls."""
+
+    def __init__(self) -> None:
+        self.active: list[Job] = []
+
+    def list_jobs(self, *, active_only: bool = False) -> list[Job]:
+        return list(self.active)
+
+    def active_job(self, project: str) -> Job | None:
+        return next((job for job in self.active if job.project_name == project), None)
+
+
+@pytest.mark.anyio
+async def test_engine_cache_is_invalidated_when_a_job_starts_or_ends(tmp_path: Path) -> None:
+    """A lifecycle action must be visible right away, even inside the 5 s poll cache
+    (spec decision 3): the cache key includes the active job ids, not just the projects.
+    """
+    _workspace(tmp_path, "demo")
+    engine = _CountingEngine({"demo": [_status("app")]})
+    jobs = _MutableJobs()
+    inventory = EnvironmentInventory(
+        workspaces=WorkspaceManager(tmp_path), engine=engine, jobs=jobs, cache_seconds=60
+    )
+
+    await inventory.list()
+    assert engine.calls == 1
+
+    await inventory.list()
+    assert engine.calls == 1  # nothing changed: still cached
+
+    job = Job(id=uuid4(), mode="stop", project_name="demo", status=JobStatus.RUNNING)
+    jobs.active = [job]
+    await inventory.list()
+    assert engine.calls == 2  # a job became active: cache invalidated
+
+    jobs.active = []
+    await inventory.list()
+    assert engine.calls == 3  # the job ended: cache invalidated again
