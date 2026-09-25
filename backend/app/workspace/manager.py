@@ -21,6 +21,7 @@ import yaml
 
 from app.models.common import PROJECT_NAME_PATTERN
 from app.models.environment import EnvironmentMeta
+from app.policy.compose_policy import BUILTIN_VARIABLES
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,19 @@ class WorkspaceManager:
             # The environment is still listed from Docker; details stay server-side.
             logger.warning("Ignoring unreadable %s of %s", META_FILE, project, exc_info=True)
             return None
+
+    def read_secret_values(self, project: str) -> list[str]:
+        """Blocking. Generated secret values of a project, only to redact them from logs."""
+        try:
+            text = (self._path_for(project) / ENV_FILE).read_text(encoding="utf-8")
+        except OSError:
+            return []
+        values: list[str] = []
+        for line in text.splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key not in BUILTIN_VARIABLES and len(value) >= 8:
+                values.append(value)
+        return values
 
     @staticmethod
     def generate_secrets(names: tuple[str, ...]) -> dict[str, str]:

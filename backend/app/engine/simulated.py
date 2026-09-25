@@ -5,11 +5,12 @@ stream) and only fakes the calls to Docker.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
+from datetime import UTC, datetime
 
 import yaml
 
-from app.engine.base import LogSink, ProgressSink, ServiceStatus, StackHandle
+from app.engine.base import LogLine, LogSink, ProgressSink, ServiceStatus, StackHandle
 
 
 class SimulatedEngine:
@@ -61,6 +62,14 @@ class SimulatedEngine:
                 ServiceStatus(service=name, state=state, health=None) for name in services
             ]
         return result
+
+    async def logs(
+        self, stack: StackHandle, service: str, *, tail: int
+    ) -> AsyncGenerator[LogLine, None]:
+        now = datetime.now(UTC)
+        for index in range(min(tail, 5)):
+            yield LogLine(timestamp=now, text=f"[simulated] {service}: log line {index + 1}")
+        await asyncio.Event().wait()  # follow mode: wait until the viewer leaves
 
     @staticmethod
     async def _images(stack: StackHandle) -> dict[str, str]:

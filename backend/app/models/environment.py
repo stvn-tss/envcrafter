@@ -86,3 +86,14 @@ class EnvironmentView(BaseModel):
 
 class EnvironmentListResponse(BaseModel):
     environments: list[EnvironmentView]  # newest first
+
+
+class LogLineFrame(BaseModel):
+    type: Literal["line"] = "line"
+    timestamp: datetime | None
+    text: str
+
+
+class LogEndFrame(BaseModel):
+    type: Literal["end"] = "end"
+    message: str

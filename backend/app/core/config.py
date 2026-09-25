@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     # Delay between simulated engine actions.
     simulated_step_delay: float = 0.4
 
+    # Container logs: largest accepted `tail`, and concurrent `logs --follow` processes.
+    log_tail_max: int = 1000
+    max_log_streams: int = 4
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -1,10 +1,16 @@
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from app.engine.base import EngineError, LogSink, ServiceStatus, StackHandle
-from app.engine.docker_compose import DockerComposeEngine, _describe, parse_ps_output
+from app.engine.base import EngineError, LogLine, LogSink, ServiceStatus, StackHandle
+from app.engine.docker_compose import (
+    DockerComposeEngine,
+    _describe,
+    parse_log_line,
+    parse_ps_output,
+)
 
 
 def test_ps_output_is_grouped_by_project() -> None:
@@ -171,3 +177,16 @@ async def test_start_still_raises_when_traefik_cannot_be_attached_after_up(
         "docker compose up",
         "docker network inspect",
     ]
+
+
+def test_log_lines_are_parsed_and_sanitized() -> None:
+    # \u202e is RIGHT-TO-LEFT OVERRIDE: written as an escape, never as a literal
+    # character, so this source file never carries a raw bidi control point.
+    raw = "2026-09-24T20:34:45.398937136Z \x1b[32mGET /\x1b[0m\x07 ok\u202e\n"
+    assert parse_log_line(raw) == LogLine(
+        timestamp=datetime(2026, 9, 24, 20, 34, 45, 398937, tzinfo=UTC), text="GET / ok"
+    )
+    assert parse_log_line("no timestamp here") == LogLine(timestamp=None, text="no timestamp here")
+    assert parse_log_line("\n") is None
+    long_line = parse_log_line("x" * 5000)
+    assert long_line is not None and len(long_line.text) == 2000

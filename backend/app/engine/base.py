@@ -1,7 +1,8 @@
 """Engine contract shared by the Docker implementation and the simulator."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -30,6 +31,12 @@ class ServiceStatus:
     health: str | None  # healthy, unhealthy, starting, or None without a healthcheck
 
 
+@dataclass(frozen=True)
+class LogLine:
+    timestamp: datetime | None
+    text: str
+
+
 class Engine(Protocol):
     async def pull(self, stack: StackHandle, log: LogSink, progress: ProgressSink) -> None: ...
 
@@ -47,3 +54,7 @@ class Engine(Protocol):
 
     async def status(self, stacks: Sequence[StackHandle]) -> dict[str, list[ServiceStatus]]:
         """Observed containers per project, for the given stacks only. Raises EngineError."""
+
+    def logs(self, stack: StackHandle, service: str, *, tail: int) -> AsyncGenerator[LogLine, None]:
+        """Last `tail` lines of one service, then follow until the caller closes the generator."""
+        ...

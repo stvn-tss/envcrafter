@@ -12,6 +12,7 @@ from starlette.requests import HTTPConnection
 from app.core.config import Settings
 from app.services.event_bus import JobEventBus
 from app.services.inventory import EnvironmentInventory
+from app.services.log_streams import LogStreamer
 from app.services.orchestrator import Orchestrator
 from app.services.template_catalog import TemplateCatalog
 
@@ -41,8 +42,14 @@ def get_inventory(conn: HTTPConnection) -> EnvironmentInventory:
     return inventory
 
 
+def get_log_streamer(conn: HTTPConnection) -> LogStreamer:
+    streamer: LogStreamer = conn.app.state.log_streamer
+    return streamer
+
+
 SettingsDep = Annotated[Settings, Depends(get_settings_from_app)]
 EventBusDep = Annotated[JobEventBus, Depends(get_event_bus)]
 CatalogDep = Annotated[TemplateCatalog, Depends(get_catalog)]
 OrchestratorDep = Annotated[Orchestrator, Depends(get_orchestrator)]
 InventoryDep = Annotated[EnvironmentInventory, Depends(get_inventory)]
+LogStreamerDep = Annotated[LogStreamer, Depends(get_log_streamer)]

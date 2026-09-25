@@ -30,6 +30,7 @@ from app.engine.simulated import SimulatedEngine
 from app.policy.images import ImageAllowlist
 from app.services.event_bus import JobEventBus
 from app.services.inventory import EnvironmentInventory
+from app.services.log_streams import LogStreamer
 from app.services.orchestrator import Orchestrator
 from app.services.template_catalog import TemplateCatalog
 from app.translator.client import LLMTranslator, Translator
@@ -128,6 +129,9 @@ def create_app(
             engine=engine,
             jobs=orchestrator,
             cache_seconds=settings.inventory_cache_seconds,
+        )
+        app.state.log_streamer = LogStreamer(
+            workspaces=workspaces, engine=engine, max_streams=settings.max_log_streams
         )
         try:
             yield

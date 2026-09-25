@@ -14,9 +14,10 @@ import json
 import logging
 import os
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
+from datetime import datetime
 
-from app.engine.base import EngineError, LogSink, ProgressSink, ServiceStatus, StackHandle
+from app.engine.base import EngineError, LogLine, LogSink, ProgressSink, ServiceStatus, StackHandle
 from app.engine.pull_progress import PullProgressTracker
 from app.models.common import PROJECT_NAME_PATTERN
 from app.models.template import SERVICE_NAME_PATTERN
@@ -36,6 +37,15 @@ _STATUS_FORMAT = (
     f'{{{{.Label "{PROJECT_LABEL}"}}}}\t{{{{.Label "{SERVICE_LABEL}"}}}}'
     "\t{{.State}}\t{{.HealthStatus}}"
 )
+_TIMESTAMP_RE = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s?(.*)$"
+)
+# C0 controls except tab and LF, DEL, and the Unicode bidi override/isolate
+# characters: logs are untrusted text. This class is written with plain escape
+# sequences only, on purpose: this source file must never carry a raw control
+# or bidi character (verify with a Unicode category scan after editing).
+_CONTROL_RE = re.compile("[\x00-\x08\x0b-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
+_MAX_LOG_LINE = 2000
 
 
 class DockerComposeEngine:
@@ -170,6 +180,40 @@ class DockerComposeEngine:
         observed = parse_ps_output(output)
         return {project: observed.get(project, []) for project in wanted}
 
+    async def logs(
+        self, stack: StackHandle, service: str, *, tail: int
+    ) -> AsyncGenerator[LogLine, None]:
+        process = await asyncio.create_subprocess_exec(
+            self._docker,
+            *self._compose(
+                stack,
+                "logs",
+                "--no-color",
+                "--no-log-prefix",
+                "--timestamps",
+                "--tail",
+                str(tail),
+                "--follow",
+                service,
+            ),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=self._environment(),
+            limit=1024 * 1024,
+        )
+        try:
+            if process.stdout is not None:
+                async for raw in process.stdout:
+                    line = parse_log_line(raw.decode("utf-8", "replace"))
+                    if line is not None:
+                        yield line
+            await process.wait()
+        finally:
+            if process.returncode is None:  # the viewer left: stop following
+                process.kill()
+                await process.wait()
+
     # --- Internals --------------------------------------------------------------
 
     @staticmethod
@@ -278,6 +322,28 @@ def parse_ps_output(output: str) -> dict[str, list[ServiceStatus]]:
             )
         )
     return result
+
+
+def parse_log_line(text: str) -> LogLine | None:
+    """One `docker compose logs --timestamps` line, without colors or control characters."""
+    text = _CONTROL_RE.sub("", _ANSI_RE.sub("", text.rstrip("\r\n")))
+    if not text.strip():
+        return None
+    timestamp: datetime | None = None
+    match = _TIMESTAMP_RE.match(text)
+    if match:
+        timestamp = _parse_timestamp(match.group(1))
+        text = match.group(2)
+    return LogLine(timestamp=timestamp, text=text[:_MAX_LOG_LINE])
+
+
+def _parse_timestamp(value: str) -> datetime | None:
+    # Docker prints nanoseconds; datetime keeps microseconds (and Python 3.12 needs <= 6 digits).
+    value = re.sub(r"(\.\d{6})\d+", r"\1", value).replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 _VERBS = ("pull", "up", "down", "stop", "logs", "ps", "connect", "disconnect", "inspect")
