@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from typing import Any
 
 import pytest
@@ -100,3 +102,55 @@ def test_failed_start_never_deletes_the_environment(
     assert events[-1]["message"] == "`docker compose up` failed (exit code 1)"
     assert (settings.workspaces_dir / "shop" / "compose.yaml").is_file()
     assert "Rolling back" not in "\n".join(event["message"] for event in events)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/api/environments/shop/actions", {"action": "start"}),
+        ("DELETE", "/api/environments/shop", None),
+    ],
+)
+def test_rollback_keeps_the_environment_reserved(
+    client: TestClient,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path: str,
+    body: dict[str, str] | None,
+) -> None:
+    """A failed deployment stays the project's active job until its rollback is over: a
+    Start or a Remove landing while `compose down` runs would race the workspace deletion
+    and leave containers that no workspace describes."""
+    rolling_back = threading.Event()
+    release = threading.Event()
+
+    async def broken_start(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+        raise EngineError("`docker compose up` failed (exit code 1)")
+
+    async def slow_remove(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+        rolling_back.set()
+        # Set by the test thread: wait in a worker thread, never on the event loop.
+        await asyncio.to_thread(release.wait, 10)
+
+    monkeypatch.setattr(SimulatedEngine, "start", broken_start)
+    monkeypatch.setattr(SimulatedEngine, "remove", slow_remove)
+    job = client.post("/api/jobs", json=SHOP).json()
+    try:
+        assert rolling_back.wait(timeout=10)
+        [during] = client.get("/api/environments").json()["environments"]
+        conflict = client.request(method, path, json=body)
+    finally:
+        release.set()
+
+    assert conflict.status_code == 409, conflict.text
+    assert during["job"] == {
+        "job_id": job["job_id"],
+        "mode": "template",
+        "events_url": job["events_url"],
+    }
+    with client.websocket_connect(job["events_url"]) as ws:
+        events = collect_events(ws)
+    assert events[-1]["type"] == "job.failed"
+    assert not (settings.workspaces_dir / "shop").exists()
+    assert client.get("/api/environments").json() == {"environments": []}

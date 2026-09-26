@@ -4,14 +4,25 @@ The HTTP handler only *schedules* work and answers `202 Accepted` right away.
 The pipeline runs as an asyncio task and reports progress exclusively through
 the event bus, which makes the WebSocket the single source of truth for progress.
 
-Pipeline (both entry points share every step after the first one):
+Deployment modes share every step after the first one:
 
     template -> template loading --+
-                                   +-> security validation -> workspace -> images
-    prompt ---> AI analysis -------+       -> networks & containers -> startup
+    prompt ---> AI analysis -------+-> security validation -> workspace -> images
+    plan -----> plan loading ------+       -> networks & containers -> startup
 
-A failure after the workspace step rolls the project back (containers,
-networks, volumes and workspace), so no half-deployed stack is left behind.
+Other job modes:
+
+    planning   AI analysis -> security validation; stores a reviewable plan, deploys nothing
+    removal    container removal -> workspace removal
+    stop       container shutdown
+    start      container startup
+    restart    container shutdown -> container startup
+
+Only a deployment mode (template, prompt, plan) rolls back: a failure after the
+workspace step removes the project (containers, networks, volumes and workspace),
+so no half-deployed stack is left behind. The job stays active until its rollback
+is over, so no other job can start on the project meanwhile. Removal and lifecycle
+jobs never roll back: a failed stop, start or restart never deletes an environment.
 """
 
 import asyncio
@@ -24,6 +35,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
+
+import yaml
 
 from app.core.config import Settings
 from app.engine.base import Engine, EngineError, ServiceStatus, StackHandle
@@ -49,7 +62,7 @@ from app.services.plan_store import PlanStore, StoredPlan
 from app.services.template_catalog import Template, TemplateCatalog
 from app.translator.client import Translator, TranslatorError
 from app.translator.spec import SpecConversionError, StackSpec, spec_to_compose_source
-from app.workspace.manager import WorkspaceManager
+from app.workspace.manager import WorkspaceError, WorkspaceManager
 from app.workspace.renderer import (
     compose_project_name,
     edge_network_name,
@@ -420,10 +433,15 @@ class Orchestrator:
             )
 
     async def _fail(self, job: Job, ctx: StepContext | None, message: str) -> None:
-        job.status = JobStatus.FAILED
-        # Only a deployment rolls back: a failed stop or start never deletes an environment.
-        if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
-            await self._rollback(job.stack, ctx)
+        # The rollback runs while the job is still RUNNING: the project stays reserved,
+        # so no start or removal can race `compose down` and the workspace deletion.
+        # The status flips before the terminal event, which the inventory cache relies on.
+        try:
+            # Only a deployment rolls back: a failed stop or start never deletes an environment.
+            if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
+                await self._rollback(job.stack, ctx)
+        finally:
+            job.status = JobStatus.FAILED
         self._publish_failure(job, ctx, message)
 
     async def _rollback(self, stack: StackHandle, ctx: StepContext) -> None:
@@ -731,29 +749,43 @@ class Orchestrator:
                 continue
             ctx.progress(*health_summary(expected, observed))
 
-    async def _existing_stack(self, project: str) -> tuple[StackHandle, list[str]]:
+    async def _existing_stack(
+        self, project: str, *, tolerate_unreadable: bool = False
+    ) -> tuple[StackHandle, list[str]]:
         """Stack handle and service names of an existing workspace. The edge network is
-        only set when the rendered file declares one (stacks without a web UI have none)."""
+        only set when the rendered file declares one (stacks without a web UI have none).
+
+        With `tolerate_unreadable` (removal), a compose file that cannot be read or parsed
+        is logged server-side and the conventional edge network is assumed: removing an
+        environment must not depend on the file it is about to delete."""
         workspace = await asyncio.to_thread(self._workspaces.get, project)
         if workspace is None:
             raise StepFailedError("This environment has no workspace.")
-        document = await asyncio.to_thread(self._workspaces.read_compose, project)
-        networks = document.get("networks")
-        services = document.get("services")
+        services: object
+        try:
+            document = await asyncio.to_thread(self._workspaces.read_compose, project)
+        except (OSError, ValueError, yaml.YAMLError, WorkspaceError):
+            if not tolerate_unreadable:
+                raise
+            logger.warning(
+                "Unreadable compose file of %s: removing it anyway", project, exc_info=True
+            )
+            # The engine tolerates detaching the reverse proxy from an absent network.
+            has_edge, services = True, None
+        else:
+            networks = document.get("networks")
+            has_edge = isinstance(networks, dict) and "edge" in networks
+            services = document.get("services")
         stack = StackHandle(
             project=project,
             compose_project=compose_project_name(project),
             compose_file=workspace.compose_file,
-            edge_network=(
-                edge_network_name(project)
-                if isinstance(networks, dict) and "edge" in networks
-                else None
-            ),
+            edge_network=edge_network_name(project) if has_edge else None,
         )
         return stack, list(services) if isinstance(services, dict) else []
 
     async def _teardown(self, ctx: StepContext) -> None:
-        stack, _ = await self._existing_stack(self._project(ctx.job))
+        stack, _ = await self._existing_stack(self._project(ctx.job), tolerate_unreadable=True)
         await self._engine.remove(stack, ctx.log)
 
     async def _stop_existing(self, ctx: StepContext) -> None:

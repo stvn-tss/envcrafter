@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import Settings
+from app.engine.base import LogSink, StackHandle
+from app.engine.simulated import SimulatedEngine
 from tests.conftest import ClientFactory, FakeTranslator, collect_events, run_job, spec
 
 DEPLOY_STEPS = [
@@ -168,6 +170,34 @@ def test_removal_deletes_the_workspace(client: TestClient, settings: Settings) -
 
     assert events[-1]["type"] == "job.succeeded"
     assert not Path(settings.workspaces_dir / "lab").exists()
+
+
+def test_removal_survives_a_corrupted_compose_file(
+    client: TestClient,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_job(client, {"mode": "template", "template_id": "dvwa", "project_name": "lab"})
+    compose_file = settings.workspaces_dir / "lab" / "compose.yaml"
+    compose_file.write_text("services: [unclosed\n", encoding="utf-8")
+    removed: list[StackHandle] = []
+
+    async def recording_remove(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+        removed.append(stack)
+
+    monkeypatch.setattr(SimulatedEngine, "remove", recording_remove)
+    response = client.delete("/api/environments/lab")
+    assert response.status_code == 202
+    with client.websocket_connect(response.json()["events_url"]) as ws:
+        events = collect_events(ws)
+
+    assert events[-1]["type"] == "job.succeeded", _logs(events)
+    assert not (settings.workspaces_dir / "lab").exists()
+    # Unknown network layout: the conventional edge network is detached (absent is tolerated).
+    assert [stack.edge_network for stack in removed] == ["ec-lab-edge"]
+    assert "compose file of lab" in caplog.text  # server-side only
+    assert "unclosed" not in _logs(events)
 
 
 def test_removal_input_validation(client: TestClient) -> None:

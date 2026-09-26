@@ -114,10 +114,13 @@ class WorkspaceManager:
             return None
 
     def read_secret_values(self, project: str) -> list[str]:
-        """Blocking. Generated secret values of a project, only to redact them from logs."""
+        """Blocking. Generated secret values of a project, only to redact them from logs.
+
+        Fails closed: only a missing `.env` (a legacy workspace) means "no secrets". Any
+        other error propagates, so logs are never streamed without their redaction."""
         try:
             text = (self._path_for(project) / ENV_FILE).read_text(encoding="utf-8")
-        except OSError:
+        except FileNotFoundError:
             return []
         values: list[str] = []
         for line in text.splitlines():

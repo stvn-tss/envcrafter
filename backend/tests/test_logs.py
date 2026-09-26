@@ -101,6 +101,27 @@ def test_client_frames_close_the_log_stream(client: TestClient) -> None:
     assert exc_info.value.code == 1008
 
 
+def test_oversized_tail_is_clamped_to_the_configured_maximum(
+    make_client: ClientFactory, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings.log_tail_max = 25
+    client = make_client()
+    deploy_shop(client)
+    tails: list[int] = []
+
+    async def recording_logs(
+        self: SimulatedEngine, stack: StackHandle, service: str, *, tail: int
+    ) -> AsyncGenerator[LogLine, None]:
+        tails.append(tail)
+        yield LogLine(timestamp=None, text="line")
+
+    monkeypatch.setattr(SimulatedEngine, "logs", recording_logs)
+    with client.websocket_connect(f"{SHOP_LOGS}&tail={10**6}") as ws:
+        assert ws.receive_json()["text"] == "line"
+
+    assert tails == [25]
+
+
 def test_log_streams_are_capped(make_client: ClientFactory, settings: Settings) -> None:
     settings.max_log_streams = 1
     client = make_client()
@@ -125,8 +146,9 @@ def _workspace(root: Path) -> WorkspaceManager:
     (root / "demo" / "compose.yaml").write_text(
         "name: ec-demo\nservices:\n  app:\n    image: busybox\n", encoding="utf-8"
     )
+    # EC_HOSTNAME is long enough (>= 8) to be taken for a secret if builtins were not excluded.
     (root / "demo" / ".env").write_text(
-        "EC_PROJECT=demo\nAPP_TOKEN=abcdefghijkl\n", encoding="utf-8"
+        "EC_PROJECT=demo\nEC_HOSTNAME=demo.localhost\nAPP_TOKEN=abcdefghijkl\n", encoding="utf-8"
     )
     return WorkspaceManager(root)
 
@@ -156,6 +178,50 @@ async def test_streamer_releases_its_slot(tmp_path: Path) -> None:
 
 def test_secret_values_exclude_builtin_variables(tmp_path: Path) -> None:
     assert _workspace(tmp_path).read_secret_values("demo") == ["abcdefghijkl"]
+
+
+def test_legacy_workspace_without_env_has_no_secrets(tmp_path: Path) -> None:
+    workspaces = _workspace(tmp_path)
+    (tmp_path / "demo" / ".env").unlink()
+    assert workspaces.read_secret_values("demo") == []
+
+
+def _unreadable_env(root: Path) -> WorkspaceManager:
+    workspaces = _workspace(root)
+    env = root / "demo" / ".env"
+    env.unlink()
+    env.mkdir()  # reading it fails with an OSError other than FileNotFoundError
+    return workspaces
+
+
+def test_unreadable_env_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(OSError) as exc_info:
+        _unreadable_env(tmp_path).read_secret_values("demo")
+    assert not isinstance(exc_info.value, FileNotFoundError)
+
+
+@pytest.mark.anyio
+async def test_streamer_refuses_to_stream_without_its_secrets(tmp_path: Path) -> None:
+    streamer = LogStreamer(
+        workspaces=_unreadable_env(tmp_path), engine=SimulatedEngine(delay=0), max_streams=1
+    )
+    with pytest.raises(OSError):
+        async with streamer.open("demo", "app", tail=1) as lines:
+            pytest.fail(f"streamed unredacted logs: {await anext(lines)}")
+    assert streamer._open == 0  # the slot is released
+
+
+def test_logs_websocket_closes_when_secrets_are_unreadable(
+    client: TestClient, settings: Settings
+) -> None:
+    deploy_shop(client)
+    env = settings.workspaces_dir / "shop" / ".env"
+    env.unlink()
+    env.mkdir()
+    # The error escapes the handler: the ASGI server logs it and closes the socket without
+    # details (the test client re-raises it instead). No log line is ever sent.
+    with pytest.raises(OSError), client.websocket_connect(SHOP_LOGS) as ws:
+        pytest.fail(f"streamed unredacted logs: {ws.receive_json()}")
 
 
 @pytest.mark.anyio

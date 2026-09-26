@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/core/config.py -> the repository root is three levels up.
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     public_domain: str = "localhost"
     pull_timeout_seconds: float = 1800.0
     start_timeout_seconds: int = 600
-    stop_timeout_seconds: int = 20
+    stop_timeout_seconds: int = Field(default=20, gt=0)
 
     # Only used for natural-language requests. Without a key, prompt mode is off.
     llm_api_key: SecretStr | None = None
@@ -68,20 +68,20 @@ class Settings(BaseSettings):
     subscriber_queue_size: int = 500
     job_retention_seconds: float = 3600.0
     # Reviewed AI plans wait this long for their deployment.
-    plan_ttl_seconds: float = 900.0
-    max_plans: int = 32
-    # One `docker ps` serves every dashboard poll during this window.
-    inventory_cache_seconds: float = 2.0
+    plan_ttl_seconds: float = Field(default=900.0, gt=0)
+    max_plans: int = Field(default=32, ge=1)
+    # One `docker ps` serves every dashboard poll during this window (0: no cache).
+    inventory_cache_seconds: float = Field(default=2.0, ge=0)
     # Health watcher period while `up --wait` runs, and step.progress throttle.
-    health_poll_seconds: float = 5.0
-    progress_interval_seconds: float = 0.5
+    health_poll_seconds: float = Field(default=5.0, gt=0)
+    progress_interval_seconds: float = Field(default=0.5, gt=0)
 
     # Delay between simulated engine actions.
     simulated_step_delay: float = 0.4
 
     # Container logs: largest accepted `tail`, and concurrent `logs --follow` processes.
-    log_tail_max: int = 1000
-    max_log_streams: int = 4
+    log_tail_max: int = Field(default=1000, ge=0)
+    max_log_streams: int = Field(default=4, ge=1)
 
 
 @lru_cache
