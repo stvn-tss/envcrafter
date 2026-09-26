@@ -25,5 +25,5 @@ access_notes:
 tags: [itsm, glpi, helpdesk, servicedesk, ticketing, inventory, cmdb, asset]
 footprint:
   download_mb: 454
-  memory_mb: 350
+  memory_mb: 400
   first_start_seconds: 120

@@ -67,6 +67,8 @@ services:
       POST: 1
       ALLOW_START: 1
       ALLOW_STOP: 1
+      # Read-only container logs for the logs viewer (CONTAINERS=1 does not cover them).
+      ALLOW_LOGS: 1
       EXEC: 0
       BUILD: 0
     volumes:

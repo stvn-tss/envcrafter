@@ -63,8 +63,8 @@ access it needs:
                     ┌─────▼──────┐        ┌──────────────┐
                     │socket-proxy│        │  socket-proxy │  containers, networks,
                     │  -traefik  │        │     -api      │  volumes, images,
-                    └─────┬──────┘        └──────┬───────┘  start/stop (never exec,
-                          │                       │           build or host access)
+                    └─────┬──────┘        └──────┬───────┘  start/stop, logs (never
+                          │                       │           exec, build or host access)
                           └──────────┬────────────┘
                                      ▼
                               Docker socket
@@ -83,9 +83,10 @@ never sees the raw socket.
 
 - **Least-privilege Docker access** — the Docker socket is mounted only by two
   filtering proxies. Traefik's proxy can only list and inspect containers.
-  The API's proxy can manage containers, networks, volumes and images and
-  start/stop them, but can never execute code in a container, build an image,
-  or reach Swarm, system or plugin endpoints.
+  The API's proxy can manage containers, networks, volumes and images,
+  start/stop them and read their logs (for the logs viewer), but can never
+  execute code in a container, build an image, or reach Swarm, system or
+  plugin endpoints.
 - **A security gate in front of every stack** — templates and AI-generated
   stacks alike are parsed with a hardened YAML loader (no aliases, no
   duplicate keys, size-capped) and validated against an allow-list schema
@@ -235,12 +236,12 @@ not reconnect); any other close (e.g. `1006`) should be retried with backoff.
 
 | Template | Category | Components | Download | Memory | First start |
 |---|---|---|---|---|---|
-| GLPI | ITSM & Administration | GLPI, MariaDB | 454 MB | 350 MB | ~120 s |
+| GLPI | ITSM & Administration | GLPI, MariaDB | 454 MB | 400 MB | ~120 s |
 | Zabbix | ITSM & Administration | Zabbix web, Zabbix server, MariaDB | 199 MB | 350 MB | ~90 s |
 | Audiobookshelf | Multimedia | Audiobookshelf | 115 MB | 150 MB | ~20 s |
 | Media Stack | Multimedia | Jellyfin, Sonarr, Radarr, Prowlarr, qBittorrent | 1048 MB | 750 MB | ~60 s |
 | DVWA | Security & Lab | DVWA, MariaDB | 318 MB | 250 MB | ~45 s |
-| OWASP Juice Shop | Security & Lab | OWASP Juice Shop | 114 MB | 200 MB | ~30 s |
+| OWASP Juice Shop | Security & Lab | OWASP Juice Shop | 114 MB | 250 MB | ~30 s |
 
 Footprint figures are approximate, measured on `linux/amd64` with images
 already cached; the end-to-end suite measures them on every run and warns
