@@ -10,19 +10,34 @@ from datetime import UTC, datetime
 
 import yaml
 
-from app.engine.base import LogLine, LogSink, ProgressSink, ServiceStatus, StackHandle
+from app.engine.base import (
+    HostResources,
+    LogLine,
+    LogSink,
+    ProgressSink,
+    RuntimeCheck,
+    ServiceStatus,
+    StackHandle,
+)
+
+# Plausible numbers for the UI; nothing is measured.
+_RESOURCES = HostResources(
+    memory_total_mb=8192, memory_available_mb=6144, disk_free_mb=51200, disk_is_virtual=False
+)
 
 
 class SimulatedEngine:
     def __init__(self, *, delay: float) -> None:
         self._delay = delay
         self._stopped: set[str] = set()  # compose projects stopped by stop()
+        self._pulled: set[str] = set()  # images "downloaded" by this process
 
     async def pull(self, stack: StackHandle, log: LogSink, progress: ProgressSink) -> None:
         images = list((await self._images(stack)).items())
         for index, (service, image) in enumerate(images, start=1):
             log(f"[simulated] {service}: pulling {image}")
             await asyncio.sleep(self._delay)
+            self._pulled.add(image)
             progress(index * 100 // len(images), f"{index} of {len(images)} images")
 
     async def create(self, stack: StackHandle, log: LogSink) -> None:
@@ -79,6 +94,18 @@ class SimulatedEngine:
         for index in range(min(tail, 5)):
             yield LogLine(timestamp=now, text=f"[simulated] {service}: log line {index + 1}")
         await asyncio.Event().wait()  # follow mode: wait until the viewer leaves
+
+    async def missing_images(self, images: Sequence[str]) -> list[str]:
+        return [image for image in dict.fromkeys(images) if image not in self._pulled]
+
+    async def resources(self) -> HostResources:
+        return _RESOURCES
+
+    async def diagnose(self) -> list[RuntimeCheck]:
+        return [
+            RuntimeCheck("docker", True, "Simulated engine: nothing runs in Docker."),
+            RuntimeCheck("proxy", True, "Simulated engine: no reverse proxy needed."),
+        ]
 
     @staticmethod
     async def _images(stack: StackHandle) -> dict[str, str]:

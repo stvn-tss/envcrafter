@@ -1,6 +1,7 @@
 """REST endpoints: health, template catalog, deployment jobs, the environment inventory
 and the settings changed from the UI."""
 
+import asyncio
 from typing import Annotated
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from pydantic import SecretStr
 from app import __version__
 from app.api.deps import (
     CatalogDep,
+    EngineDep,
     InventoryDep,
     LLMSettingsDep,
     OrchestratorDep,
@@ -28,6 +30,7 @@ from app.models.deployment import (
 from app.models.environment import EnvironmentListResponse, EnvironmentView
 from app.models.plan import PlanView
 from app.models.settings import LLMKeyRequest, SettingsView
+from app.models.system import SystemView, TemplateReadiness
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
 from app.services.llm_settings import SettingsStorageError
 from app.services.orchestrator import (
@@ -41,6 +44,12 @@ from app.services.orchestrator import (
     UnknownServiceError,
     UnknownTemplateError,
     job_events_url,
+)
+from app.services.readiness import (
+    resources_view,
+    system_checks,
+    template_images,
+    template_readiness,
 )
 from app.translator.client import KeyRejectedError, TranslatorError
 
@@ -115,6 +124,32 @@ async def template_logo(
     if if_none_match == logo.etag:
         return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
     return Response(content=logo.data, media_type=logo.media_type, headers=headers)
+
+
+@router.get("/templates/{template_id}/readiness")
+async def get_template_readiness(
+    template_id: Annotated[str, Path(pattern=TEMPLATE_ID_PATTERN)],
+    catalog: CatalogDep,
+    engine: EngineDep,
+) -> TemplateReadiness:
+    """What deploying this template needs on this machine: downloads left, memory, disk."""
+    template = catalog.get(template_id)
+    if template is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown template")
+    missing, resources = await asyncio.gather(
+        engine.missing_images(template_images(template)), engine.resources()
+    )
+    return template_readiness(template, len(missing), resources)
+
+
+@router.get("/system")
+async def get_system(engine: EngineDep, llm: LLMSettingsDep) -> SystemView:
+    """First-run checklist: Docker, the reverse proxy, free memory and disk, the AI key."""
+    runtime, resources = await asyncio.gather(engine.diagnose(), engine.resources())
+    return SystemView(
+        checks=system_checks(runtime, resources, llm.status().configured),
+        resources=resources_view(resources),
+    )
 
 
 @router.post(

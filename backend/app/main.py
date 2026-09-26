@@ -74,6 +74,7 @@ def build_engine(settings: Settings) -> Engine:
         pull_timeout=settings.pull_timeout_seconds,
         start_timeout=settings.start_timeout_seconds,
         stop_timeout=settings.stop_timeout_seconds,
+        disk_path=settings.workspaces_dir,
     )
 
 
@@ -129,6 +130,7 @@ def create_app(
         await llm_settings.load()
 
         app.state.settings = settings
+        app.state.engine = engine
         app.state.catalog = catalog
         app.state.event_bus = bus
         app.state.orchestrator = orchestrator

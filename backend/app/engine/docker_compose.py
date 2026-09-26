@@ -17,8 +17,19 @@ import os
 import re
 from collections.abc import AsyncGenerator, Callable, Sequence
 from datetime import datetime
+from pathlib import Path
 
-from app.engine.base import EngineError, LogLine, LogSink, ProgressSink, ServiceStatus, StackHandle
+from app.engine.base import (
+    EngineError,
+    HostResources,
+    LogLine,
+    LogSink,
+    ProgressSink,
+    RuntimeCheck,
+    ServiceStatus,
+    StackHandle,
+)
+from app.engine.host import read_host_resources
 from app.engine.pull_progress import PullProgressTracker
 from app.models.common import PROJECT_NAME_PATTERN
 from app.models.template import SERVICE_NAME_PATTERN
@@ -58,6 +69,7 @@ class DockerComposeEngine:
         pull_timeout: float,
         start_timeout: int,
         stop_timeout: int,
+        disk_path: Path,
     ) -> None:
         self._docker = docker_binary
         self._docker_host = docker_host
@@ -65,6 +77,7 @@ class DockerComposeEngine:
         self._pull_timeout = pull_timeout
         self._start_timeout = start_timeout
         self._stop_timeout = stop_timeout
+        self._disk_path = disk_path  # where workspaces live: on Docker's data disk
 
     async def pull(self, stack: StackHandle, log: LogSink, progress: ProgressSink) -> None:
         tracker = PullProgressTracker()
@@ -265,6 +278,43 @@ class DockerComposeEngine:
             with contextlib.suppress(asyncio.CancelledError):
                 await stderr_task
 
+    async def missing_images(self, images: Sequence[str]) -> list[str]:
+        unique = list(dict.fromkeys(images))
+        present = await asyncio.gather(
+            *(
+                self._succeeds(["image", "inspect", "--format", "{{.Id}}", image], timeout=10)
+                for image in unique
+            )
+        )
+        return [image for image, found in zip(unique, present, strict=True) if not found]
+
+    async def resources(self) -> HostResources:
+        return await asyncio.to_thread(read_host_resources, self._disk_path)
+
+    async def diagnose(self) -> list[RuntimeCheck]:
+        try:
+            version = await self._capture(
+                ["version", "--format", "{{.Server.Version}}"], timeout=10
+            )
+        except EngineError:
+            return [
+                RuntimeCheck("docker", False, "Docker does not answer through the socket proxy."),
+                RuntimeCheck("proxy", False, "Unknown while Docker does not answer."),
+            ]
+        version = _CONTROL_RE.sub("", version).strip()[:40]
+        docker = RuntimeCheck("docker", True, f"Docker {version}" if version else "Docker answers.")
+        try:
+            state = await self._capture(
+                ["container", "inspect", "--format", "{{.State.Status}}", self._traefik],
+                timeout=10,
+            )
+        except EngineError:
+            state = "missing"
+        state = _CONTROL_RE.sub("", state).strip()[:20] or "missing"
+        if state == "running":
+            return [docker, RuntimeCheck("proxy", True, "The reverse proxy is running.")]
+        return [docker, RuntimeCheck("proxy", False, f"The reverse proxy is {state}.")]
+
     # --- Internals --------------------------------------------------------------
 
     @staticmethod
@@ -288,6 +338,26 @@ class DockerComposeEngine:
             if key in os.environ:
                 env[key] = os.environ[key]
         return env
+
+    async def _succeeds(self, args: list[str], *, timeout: float) -> bool:  # noqa: ASYNC109
+        """Run a read-only docker command; True when it exits with 0. Output is discarded."""
+        process = await asyncio.create_subprocess_exec(
+            self._docker,
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=self._environment(),
+        )
+        try:
+            async with asyncio.timeout(timeout):
+                return await process.wait() == 0
+        except TimeoutError:
+            return False
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
 
     async def _capture(self, args: list[str], *, timeout: float) -> str:  # noqa: ASYNC109
         """Run a read-only docker command and return its standard output, truncated to

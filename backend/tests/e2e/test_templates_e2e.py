@@ -260,6 +260,25 @@ def test_cancel_during_startup_leaves_nothing_behind() -> None:
         assert leftovers.strip() == "", listing
 
 
+def _image_present(ref: str) -> bool:
+    command = ["docker", "image", "inspect", ref]
+    return subprocess.run(command, capture_output=True, check=False).returncode == 0  # noqa: S603
+
+
+def test_readiness_on_the_real_engine() -> None:
+    with _api() as api:
+        system = api.get("/api/system").json()
+        checks = {check["name"]: check for check in system["checks"]}
+        assert checks["docker"]["status"] == "ok", checks
+        assert checks["proxy"]["status"] == "ok", checks
+        assert system["resources"]["memory_total_mb"] > 0
+        assert system["resources"]["disk_free_mb"] > 0
+        readiness = api.get("/api/templates/owasp-juice-shop/readiness").json()
+        assert readiness["images_total"] == 1
+        present = _image_present("docker.io/bkimminich/juice-shop:v20.2.0")
+        assert readiness["images_missing"] == (0 if present else 1)
+
+
 @pytest.mark.skipif(
     not os.environ.get("ENVCRAFTER_E2E_LLM"),
     reason="set ENVCRAFTER_E2E_LLM=1 to call the Claude API (costs a request)",

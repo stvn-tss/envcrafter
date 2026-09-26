@@ -65,6 +65,7 @@ def _engine() -> DockerComposeEngine:
         pull_timeout=10,
         start_timeout=30,
         stop_timeout=10,
+        disk_path=Path("."),
     )
 
 
@@ -311,3 +312,44 @@ async def test_one_service_is_stopped_and_started_alone(
     assert start[-7:] == ["up", "--detach", "--wait", "--wait-timeout", "30", "--no-deps", "sonarr"]
     with pytest.raises(EngineError):
         await engine.stop(_stack(tmp_path), lambda _line: None, service="../evil")
+
+
+@pytest.mark.anyio
+async def test_missing_images_inspects_each_reference_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine()
+    asked: list[list[str]] = []
+
+    async def succeeds(args: list[str], *, timeout: float) -> bool:  # noqa: ASYNC109
+        asked.append(args)
+        return args[-1].startswith("docker.io/library/mariadb")
+
+    monkeypatch.setattr(engine, "_succeeds", succeeds)
+    glpi, mariadb = "docker.io/glpi/glpi:11.0.9", "docker.io/library/mariadb:11.4.13"
+
+    assert await engine.missing_images([glpi, mariadb, glpi]) == [glpi]
+    assert [args[:4] for args in asked] == [["image", "inspect", "--format", "{{.Id}}"]] * 2
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("effects", "expected"),
+    [
+        (["29.8.0\n", "running\n"], [("docker", True), ("proxy", True)]),
+        (["29.8.0\n", "exited\n"], [("docker", True), ("proxy", False)]),
+        (["29.8.0\n", EngineError("no such container")], [("docker", True), ("proxy", False)]),
+        ([EngineError("unreachable")], [("docker", False), ("proxy", False)]),
+    ],
+    ids=["running", "exited", "missing", "unreachable"],
+)
+async def test_diagnose_reports_docker_and_the_reverse_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+    effects: list[str | Exception],
+    expected: list[tuple[str, bool]],
+) -> None:
+    engine = _engine()
+    _wire(engine, _Recorder(effects), monkeypatch)
+    checks = await engine.diagnose()
+    assert [(check.name, check.ok) for check in checks] == expected
+    assert all(check.detail for check in checks)

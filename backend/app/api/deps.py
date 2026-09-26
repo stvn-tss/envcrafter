@@ -10,6 +10,7 @@ from fastapi import Depends
 from starlette.requests import HTTPConnection
 
 from app.core.config import Settings
+from app.engine.base import Engine
 from app.services.event_bus import JobEventBus
 from app.services.inventory import EnvironmentInventory
 from app.services.llm_settings import LLMSettings
@@ -48,6 +49,11 @@ def get_log_streamer(conn: HTTPConnection) -> LogStreamer:
     return streamer
 
 
+def get_engine(conn: HTTPConnection) -> Engine:
+    engine: Engine = conn.app.state.engine
+    return engine
+
+
 def get_llm_settings(conn: HTTPConnection) -> LLMSettings:
     llm: LLMSettings = conn.app.state.llm_settings
     return llm
@@ -60,3 +66,4 @@ OrchestratorDep = Annotated[Orchestrator, Depends(get_orchestrator)]
 InventoryDep = Annotated[EnvironmentInventory, Depends(get_inventory)]
 LogStreamerDep = Annotated[LogStreamer, Depends(get_log_streamer)]
 LLMSettingsDep = Annotated[LLMSettings, Depends(get_llm_settings)]
+EngineDep = Annotated[Engine, Depends(get_engine)]
