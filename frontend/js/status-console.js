@@ -361,7 +361,7 @@ export class StatusConsole {
 
   #setPercent(percent, text) {
     const value = Math.round(Math.min(Math.max(percent, 0), 100));
-    this.progressBar.style.width = `${value}%`; // CSSOM: allowed by the CSP, unlike style=""
+    this.progressBar.style.transform = `scaleX(${value / 100})`; // CSSOM: allowed by the CSP, unlike style=""
     this.progress.setAttribute("aria-valuenow", String(value));
     this.progress.setAttribute("aria-valuetext", text);
   }

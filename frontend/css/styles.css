@@ -58,7 +58,8 @@ h2 { font-size: 1.05rem; font-weight: 600; }
 
 kbd {
   font: var(--text-xs) var(--mono); color: var(--text-2);
-  padding: 0 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px;
+  padding: 0 5px; border: 1px solid var(--border-strong); border-radius: 4px;
+  box-shadow: inset 0 -1px 0 var(--border-strong); /* keycap depth without a thick bottom border */
 }
 
 .dialog-body, .log-list, .table-wrap, .status-panel {
@@ -354,9 +355,11 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .progress { height: 6px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
 .progress-bar {
-  width: 0; height: 100%;
+  height: 100%;
   background: linear-gradient(90deg, var(--accent), var(--success));
-  transition: width 0.4s ease;
+  /* Scaled, not resized: a transform animates on the compositor without re-layout. */
+  transform: scaleX(0); transform-origin: left;
+  transition: transform 0.4s ease;
 }
 .progress[data-outcome="error"] .progress-bar { background: var(--danger); }
 .progress-label { margin: 6px 0 0; }
@@ -511,7 +514,6 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .dialog.wide { width: min(960px, calc(100vw - 32px)); }
 .dialog[open] { display: flex; flex-direction: column; }
 .dialog::backdrop { background: rgb(0 0 0 / 0.6); }
-.dialog-form { display: flex; flex-direction: column; min-height: 0; }
 .dialog-header {
   display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
   padding: 20px 20px 0;

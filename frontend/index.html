@@ -162,27 +162,27 @@
   </dialog>
 
   <dialog id="remove-dialog" class="dialog small" aria-labelledby="remove-title">
-    <form id="remove-form" class="dialog-form">
-      <div class="dialog-header">
-        <h2 id="remove-title"></h2>
-        <button type="button" class="icon-button" data-close aria-label="Close" data-icon="close"></button>
-      </div>
-      <div class="dialog-body">
+    <div class="dialog-header">
+      <h2 id="remove-title"></h2>
+      <button type="button" class="icon-button" data-close aria-label="Close" data-icon="close"></button>
+    </div>
+    <div class="dialog-body">
+      <form id="remove-form">
         <p>This permanently deletes:</p>
         <ul id="remove-items" class="notes"></ul>
         <div class="field wide">
           <label for="remove-confirm" id="remove-confirm-label"></label>
           <input id="remove-confirm" class="input" autocomplete="off" spellcheck="false" autocapitalize="none">
         </div>
+      </form>
+    </div>
+    <div class="dialog-footer">
+      <p id="remove-error" class="inline-alert" role="alert" hidden></p>
+      <div class="footer-actions">
+        <button type="button" class="button" data-close>Cancel</button>
+        <button type="submit" form="remove-form" class="button danger-solid" id="remove-submit" disabled>Remove environment</button>
       </div>
-      <div class="dialog-footer">
-        <p id="remove-error" class="inline-alert" role="alert" hidden></p>
-        <div class="footer-actions">
-          <button type="button" class="button" data-close>Cancel</button>
-          <button type="submit" class="button danger-solid" id="remove-submit" disabled>Remove environment</button>
-        </div>
-      </div>
-    </form>
+    </div>
   </dialog>
 
   <dialog id="logs-dialog" class="dialog wide" aria-labelledby="logs-title">
