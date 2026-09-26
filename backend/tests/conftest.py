@@ -4,11 +4,13 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from starlette.testclient import WebSocketTestSession
 
 from app.core.config import Settings
 from app.main import TranslatorFactory, create_app
 from app.policy.images import ImageAllowlist
+from app.translator.client import KeyRejectedError
 from app.translator.spec import StackSpec
 
 TERMINAL_TYPES = {"job.succeeded", "job.failed"}
@@ -27,9 +29,14 @@ def settings(tmp_path: Path) -> Settings:
         serve_frontend=False,
         allowed_hosts=["testserver"],
         workspaces_dir=tmp_path / "workspaces",
+        settings_file=tmp_path / "data" / "settings.json",
         llm_api_key=None,
         inventory_cache_seconds=0,
     )
+
+
+# Stands in for ENVCRAFTER_LLM_API_KEY when a test needs a translator from the start.
+TEST_API_KEY = SecretStr("sk-ant-test-environment-key")
 
 
 class FakeTranslator:
@@ -37,13 +44,18 @@ class FakeTranslator:
 
     model = "fake-model"
 
-    def __init__(self, spec: StackSpec) -> None:
+    def __init__(self, spec: StackSpec, *, rejected: bool = False) -> None:
         self.spec = spec
+        self.rejected = rejected
         self.prompts: list[str] = []
 
     async def translate(self, prompt: str) -> StackSpec:
         self.prompts.append(prompt)
         return self.spec
+
+    async def verify(self) -> None:
+        if self.rejected:
+            raise KeyRejectedError("The Claude API rejected this key.")
 
 
 ClientFactory = Callable[..., TestClient]
@@ -53,13 +65,21 @@ ClientFactory = Callable[..., TestClient]
 def make_client(settings: Settings) -> Iterator[ClientFactory]:
     clients: list[TestClient] = []
 
-    def factory(translator: FakeTranslator | None = None) -> TestClient:
-        translator_factory: TranslatorFactory | None = (
-            (lambda catalog, allowlist: translator) if translator is not None else None
-        )
+    def factory(
+        translator: FakeTranslator | None = None,
+        *,
+        translator_factory: TranslatorFactory | None = None,
+    ) -> TestClient:
+        """`translator`: served from the start, as with an environment key.
+        `translator_factory`: only used once a key is saved (or with settings.llm_api_key)."""
+        app_settings = settings
+        if translator is not None:
+            translator_factory = lambda key: translator  # noqa: E731
+            if settings.llm_api_key is None:
+                app_settings = settings.model_copy(update={"llm_api_key": TEST_API_KEY})
         # The context manager runs the lifespan (catalog, bus, orchestrator) and
         # keeps one event loop alive, so background job tasks can run.
-        client = TestClient(create_app(settings, translator_factory))
+        client = TestClient(create_app(app_settings, translator_factory))
         client.__enter__()
         clients.append(client)
         return client

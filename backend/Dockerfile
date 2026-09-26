@@ -29,9 +29,9 @@ COPY backend/app ./app
 COPY templates /app/templates
 COPY frontend /app/frontend
 
-# Unprivileged runtime user; the workspaces volume inherits this ownership.
+# Unprivileged runtime user; the workspaces and settings volumes inherit this ownership.
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin envcrafter \
-    && install -d -o 10001 -g 10001 -m 0700 /data/workspaces
+    && install -d -o 10001 -g 10001 -m 0700 /data/workspaces /data/settings
 
 USER 10001
 ENV PATH=/opt/venv/bin:$PATH \
@@ -39,7 +39,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     DOCKER_CONFIG=/tmp/.docker \
     ENVCRAFTER_TEMPLATES_DIR=/app/templates \
     ENVCRAFTER_FRONTEND_DIR=/app/frontend \
-    ENVCRAFTER_WORKSPACES_DIR=/data/workspaces
+    ENVCRAFTER_WORKSPACES_DIR=/data/workspaces \
+    ENVCRAFTER_SETTINGS_FILE=/data/settings/settings.json
 
 EXPOSE 8000
 # 0.0.0.0 inside the container only: the port is never published, Traefik

@@ -9,12 +9,13 @@ import logging
 import mimetypes
 import os
 import shutil
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import SecretStr
 from starlette.responses import Response
 from starlette.staticfiles import PathLike
 from starlette.types import Scope
@@ -30,6 +31,7 @@ from app.engine.simulated import SimulatedEngine
 from app.policy.images import ImageAllowlist
 from app.services.event_bus import JobEventBus
 from app.services.inventory import EnvironmentInventory
+from app.services.llm_settings import LLMSettings, SettingsStore, TranslatorFactory
 from app.services.log_streams import LogStreamer
 from app.services.orchestrator import Orchestrator
 from app.services.plan_store import PlanStore
@@ -75,13 +77,11 @@ def build_engine(settings: Settings) -> Engine:
     )
 
 
-TranslatorFactory = Callable[[TemplateCatalog, ImageAllowlist], Translator]
-
-
 def create_app(
     settings: Settings | None = None, translator_factory: TranslatorFactory | None = None
 ) -> FastAPI:
-    """`translator_factory` replaces the Claude-backed translator (tests, offline use)."""
+    """`translator_factory` replaces the Claude-backed translator (tests, offline use): it
+    receives the active Claude API key and is called again whenever the key changes."""
     settings = settings or get_settings()
     is_dev = settings.environment == "development"
 
@@ -91,20 +91,17 @@ def create_app(
         # A template or allow-list error stops the startup here, on purpose.
         allowlist = await asyncio.to_thread(ImageAllowlist.load, settings.image_allowlist)
         catalog = await asyncio.to_thread(TemplateCatalog.load, settings.templates_dir, allowlist)
-        translator: Translator | None = None
-        if translator_factory is not None:
-            translator = translator_factory(catalog, allowlist)
-        elif settings.llm_api_key is not None:
-            translator = LLMTranslator(
-                api_key=settings.llm_api_key,
+
+        def claude_translator(api_key: SecretStr) -> Translator:
+            return LLMTranslator(
+                api_key=api_key,
                 model=settings.llm_model,
                 effort=settings.llm_effort,
                 timeout=settings.llm_timeout_seconds,
                 catalog=catalog,
                 allowlist=allowlist,
             )
-        else:
-            logger.warning("No ENVCRAFTER_LLM_API_KEY: natural-language requests are disabled")
+
         bus = JobEventBus(
             history_size=settings.event_history_size,
             queue_size=settings.subscriber_queue_size,
@@ -118,15 +115,24 @@ def create_app(
             allowlist=allowlist,
             workspaces=workspaces,
             engine=engine,
-            translator=translator,
+            translator=None,  # installed by LLMSettings.load() from the active key
             settings=settings,
             plans=plans,
         )
+        llm_settings = LLMSettings(
+            store=SettingsStore(settings.settings_file),
+            environment_key=settings.llm_api_key,
+            model=settings.llm_model,
+            factory=translator_factory or claude_translator,
+            target=orchestrator,
+        )
+        await llm_settings.load()
 
         app.state.settings = settings
         app.state.catalog = catalog
         app.state.event_bus = bus
         app.state.orchestrator = orchestrator
+        app.state.llm_settings = llm_settings
         app.state.inventory = EnvironmentInventory(
             workspaces=workspaces,
             engine=engine,

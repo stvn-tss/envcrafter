@@ -8,8 +8,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.timezones import is_known_timezone
 
 # backend/app/core/config.py -> the repository root is three levels up.
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -37,6 +39,8 @@ class Settings(BaseSettings):
     templates_dir: Path = REPO_ROOT / "templates"
     image_allowlist: Path = APP_DIR / "policy" / "image_allowlist.yaml"
     workspaces_dir: Path = REPO_ROOT / "workspaces"
+    # Settings changed from the UI (the Claude API key). Git-ignored, owner-only permissions.
+    settings_file: Path = REPO_ROOT / "data" / "settings.json"
 
     # Dev convenience: serve the static frontend from the API process (same origin).
     serve_frontend: bool = True
@@ -51,11 +55,14 @@ class Settings(BaseSettings):
     traefik_container: str = "envcrafter-traefik"
     # Environments are served at http://<project>.<public_domain>.
     public_domain: str = "localhost"
+    # Written to each workspace as ${EC_TZ} when the browser does not send a known time zone.
+    timezone: str = "Etc/UTC"
     pull_timeout_seconds: float = 1800.0
     start_timeout_seconds: int = 600
     stop_timeout_seconds: int = Field(default=20, ge=0)
 
-    # Only used for natural-language requests. Without a key, prompt mode is off.
+    # Only used for natural-language requests. Without a key, prompt mode is off. A key saved
+    # from the UI (settings_file) takes precedence over this one.
     llm_api_key: SecretStr | None = None
     llm_model: str = "claude-opus-5-5"
     # Opus 5.5 thinks at "medium" effort unless told otherwise. A deployment plan
@@ -82,6 +89,13 @@ class Settings(BaseSettings):
     # Container logs: largest accepted `tail`, and concurrent `logs --follow` processes.
     log_tail_max: int = Field(default=1000, ge=0)
     max_log_streams: int = Field(default=4, ge=1)
+
+    @field_validator("timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        if not is_known_timezone(value):
+            raise ValueError(f"unknown IANA time zone {value!r}")
+        return value
 
 
 @lru_cache

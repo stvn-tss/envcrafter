@@ -127,7 +127,10 @@ export class StatusConsole {
     };
   }
 
-  /** @param {{ title?: string, template?: object }} context */
+  /**
+   * @param {{ title?: string, template?: object, retry?: () => Promise<string | null> }} context
+   *   retry: starts the same request again (only for jobs started from this page)
+   */
   start(job, context = {}) {
     this.#job = job;
     this.#context = context;
@@ -393,6 +396,20 @@ export class StatusConsole {
     if (outcome === "error") {
       if (this.#counts().failed) {
         children.push(el("p", { className: "hint", text: "The failed step is open below with its logs." }));
+      }
+      const retry = this.#context.retry;
+      if (typeof retry === "function") {
+        const button = el("button", { className: "button primary", attrs: { type: "button" } }, [
+          icon("retry"),
+          el("span", { text: "Retry" }),
+        ]);
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          const error = await retry();
+          button.disabled = false;
+          if (error) showToast(error);
+        });
+        children.push(el("div", { className: "result-actions" }, [button]));
       }
       return children;
     }

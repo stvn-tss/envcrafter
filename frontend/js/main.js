@@ -1,17 +1,20 @@
-/** Entry point: wires the catalog, the request form, the dialogs and the status console. */
+/** Entry point: wires the catalog, the request form, the dialogs, the settings and the status console. */
 import {
   ApiError, createJob, createPlan, fetchActiveJobs, fetchJob, fetchPlan, fetchTemplates, removeEnvironment,
   runEnvironmentAction,
 } from "./api.js";
-import { Catalog } from "./catalog.js";
+import { Catalog, rankTemplates } from "./catalog.js";
 import { loadConfig } from "./config.js";
+import { withProject } from "./environment.js";
 import { EnvironmentsPanel } from "./environments.js";
 import { icon } from "./icons.js";
 import { openJobStream } from "./job-stream.js";
 import { LogsDialog } from "./logs-dialog.js";
+import { enableNotifications, notificationState, notifyIfAway } from "./notifications.js";
 import { PlanReview } from "./plan-review.js";
 import { PromptForm } from "./prompt-form.js";
 import { RemoveDialog } from "./remove-dialog.js";
+import { SettingsDialog } from "./settings-dialog.js";
 import { STATUS, StatusConsole } from "./status-console.js";
 import { TemplateDetails } from "./template-details.js";
 import { showToast } from "./toasts.js";
@@ -21,10 +24,22 @@ const statusPanel = document.querySelector("#status-panel");
 const statusTitle = document.querySelector("#status-title");
 const jobPill = document.querySelector("#job-pill");
 const jobPillText = document.querySelector("#job-pill-text");
+const notifyOffer = document.querySelector("#notify-offer");
 
 const JOB_KEY = "envcrafter.job";
 const LIVE_STATES = new Set(["pending", "running", "starting", "degraded"]);
 const TERMINAL = new Set(["ready", "removed", "stopped", "running", "planned", "failed"]);
+const ACTIVE = new Set(["deploying", "removing", "stopping", "starting", "restarting", "planning"]);
+
+/** The browser's time zone, sent with deployments and written to the workspace as ${EC_TZ}. */
+const TIMEZONE = (() => {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof zone === "string" && /^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z0-9_+-]+){0,2}$/.test(zone) ? zone : null;
+  } catch {
+    return null;
+  }
+})();
 
 let activeStream = null;
 let activeJob = null; // { job, context } currently displayed
@@ -32,6 +47,7 @@ let summary = null; // last StatusConsole summary
 let statusInView = true;
 let categoryLabels = new Map();
 let templatesById = new Map();
+let templates = [];
 let lastStatus = null;
 const categoryLabel = (id) => categoryLabels.get(id) ?? id;
 
@@ -76,16 +92,39 @@ const catalog = new Catalog(document.querySelector("#catalog"), {
   },
   categoryLabel,
 });
+const settingsDialog = new SettingsDialog(document.querySelector("#settings-dialog"), {
+  onKeyChange: () => refreshAvailability(),
+  onNotificationsChange: () => refreshNotifyOffer(),
+});
 const promptForm = new PromptForm(document.querySelector("#prompt-form"), {
   onSubmit: (prompt) => run(() => createPlan(prompt), { title: "AI analysis", autoReview: true }),
+  onAddKey: () => settingsDialog.open({ focusKey: true }),
+  findTemplates: (text) => rankTemplates(templates, text, categoryLabel),
+  onOpenTemplate: (template) => details.open(template),
 });
 const planReview = new PlanReview(document.querySelector("#plan-dialog"), {
   onDeploy: (plan, projectName) => {
-    const payload = { mode: "plan", plan_id: plan.plan_id };
+    const payload = withTimezone({ mode: "plan", plan_id: plan.plan_id });
     if (projectName) payload.project_name = projectName;
     return run(() => createJob(payload), { title: plan.title, templateId: plan.template_id ?? undefined });
   },
 });
+document.querySelector("#settings-open").addEventListener("click", () => settingsDialog.open());
+notifyOffer.addEventListener("click", async () => {
+  await enableNotifications();
+  refreshNotifyOffer();
+});
+
+function withTimezone(payload) {
+  if (TIMEZONE) payload.timezone = TIMEZONE;
+  return payload;
+}
+
+/** A key was saved or removed in Settings: switch the request form between AI and search. */
+async function refreshAvailability() {
+  const capabilities = await loadConfig();
+  promptForm.setAvailability(capabilities.llm_available);
+}
 
 async function openPlan(planId) {
   try {
@@ -105,6 +144,11 @@ const environments = new EnvironmentsPanel(document.querySelector("#environments
   onLogs: (environment) => logsDialog.open(environment),
   onRemove: (target) => removeDialog.open(target),
   onFollow: (job, environment) => follow({ job: { ...job, project_name: environment.project }, context: { title: environment.title, templateId: environment.template_id } }),
+  notesFor: (environment) => {
+    const template = templatesById.get(environment.template_id);
+    const notes = Array.isArray(template?.access_notes) ? template.access_notes : [];
+    return notes.map((note) => withProject(note, environment.project));
+  },
   onUpdate: (list) => {
     const counts = new Map();
     for (const environment of list) {
@@ -128,6 +172,8 @@ function setBusy(busy) {
  * next to what triggered them: the job currently displayed stays on screen.
  */
 async function run(startJob, context) {
+  // The same request again, from the failed job's Retry button.
+  context.retry = () => run(startJob, context);
   setBusy(true);
   try {
     const job = await startJob();
@@ -194,7 +240,7 @@ async function resumeJob() {
 }
 
 function deployTemplate(template, projectName = null) {
-  const payload = { mode: "template", template_id: template.id };
+  const payload = withTimezone({ mode: "template", template_id: template.id });
   if (projectName) payload.project_name = projectName;
   return run(() => createJob(payload), { title: template.name, template });
 }
@@ -215,8 +261,18 @@ function updateChrome(next) {
   const text = HEADLINES[next.status]?.(next);
   document.title = text ? `${text} · ${BASE_TITLE}` : BASE_TITLE;
   refreshPill();
-  if (next.status !== lastStatus && TERMINAL.has(next.status)) environments.refresh();
+  if (next.status !== lastStatus && TERMINAL.has(next.status)) {
+    environments.refresh();
+    // Only a job seen running here: a replayed, long-finished job notifies nobody.
+    if (ACTIVE.has(lastStatus) && text) notifyIfAway(text, activeJob?.job?.job_id);
+  }
   lastStatus = next.status;
+  refreshNotifyOffer();
+}
+
+/** "Notify me when it's done" next to a running job, until notifications are decided. */
+function refreshNotifyOffer() {
+  notifyOffer.hidden = !(summary && ACTIVE.has(summary.status) && notificationState() === "unset");
 }
 
 /** Floating shortcut to the status panel, shown only while the panel is out of view. */
@@ -240,8 +296,9 @@ jobPill.addEventListener("click", () => {
 
 async function loadCatalog() {
   try {
-    const { categories, templates } = await fetchTemplates();
+    const { categories, templates: list } = await fetchTemplates();
     categoryLabels = new Map(categories.map((category) => [category.id, category.label]));
+    templates = Array.isArray(list) ? list : [];
     templatesById = new Map(templates.map((template) => [template.id, template]));
     catalog.render(categories, templates);
     promptForm.showSuggestions(new Set(templates.map((template) => template.id)));
@@ -250,13 +307,10 @@ async function loadCatalog() {
   }
 }
 
-const LLM_UNAVAILABLE =
-  "Natural-language requests are turned off on this server: set ENVCRAFTER_LLM_API_KEY to enable them.";
-
 async function init() {
   const capabilities = await loadConfig();
   document.querySelector("#engine-banner").hidden = capabilities.engine !== "simulated";
-  promptForm.setAvailability(capabilities.llm_available, LLM_UNAVAILABLE);
+  promptForm.setAvailability(capabilities.llm_available);
   await loadCatalog();
   environments.start();
   await resumeJob();

@@ -24,7 +24,7 @@ secrets: [DB_PASSWORD, DB_ROOT_PASSWORD]
 needs_internet: false
 access_notes:
   - "Default account: Admin / zabbix. Change it after the first login."
-  - "The stack is isolated: to monitor other environments, link it to them later with a dedicated link network."
+  - "The stack runs on its own isolated network: it cannot reach other environments or your local network."
 tags: [itsm, zabbix, monitoring, supervision, centreon, nagios, snmp, alerting]
 footprint:
   download_mb: 199

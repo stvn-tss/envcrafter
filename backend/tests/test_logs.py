@@ -146,9 +146,11 @@ def _workspace(root: Path) -> WorkspaceManager:
     (root / "demo" / "compose.yaml").write_text(
         "name: ec-demo\nservices:\n  app:\n    image: busybox\n", encoding="utf-8"
     )
-    # EC_HOSTNAME is long enough (>= 8) to be taken for a secret if builtins were not excluded.
+    # EC_HOSTNAME and EC_TZ are long enough (>= 8) to be taken for secrets if builtins were
+    # not excluded: every "Europe/Paris" in the logs would then read [redacted].
     (root / "demo" / ".env").write_text(
-        "EC_PROJECT=demo\nEC_HOSTNAME=demo.localhost\nAPP_TOKEN=abcdefghijkl\n", encoding="utf-8"
+        "EC_PROJECT=demo\nEC_HOSTNAME=demo.localhost\nEC_TZ=Europe/Paris\nAPP_TOKEN=abcdefghijkl\n",
+        encoding="utf-8",
     )
     return WorkspaceManager(root)
 

@@ -12,7 +12,7 @@ import uvicorn
 
 from app.core.config import Settings
 from app.main import TranslatorFactory, create_app
-from tests.conftest import FakeTranslator, spec
+from tests.conftest import TEST_API_KEY, FakeTranslator, spec
 
 
 @dataclass(frozen=True)
@@ -40,12 +40,16 @@ def _serve(
         allowed_origins=[origin],
         allowed_hosts=["127.0.0.1"],
         workspaces_dir=tmp_path / "workspaces",
-        llm_api_key=None,
+        settings_file=tmp_path / "data" / "settings.json",
+        llm_api_key=TEST_API_KEY if translator is not None else None,
         inventory_cache_seconds=0,
         health_poll_seconds=0.2,
     )
+    # Any key saved from the Settings dialog is accepted, unless it contains "rejected".
     factory: TranslatorFactory | None = (
-        (lambda catalog, allowlist: translator) if translator is not None else None
+        (lambda key: translator)
+        if translator is not None
+        else lambda key: FakeTranslator(spec(), rejected="rejected" in key.get_secret_value())
     )
     server = uvicorn.Server(
         uvicorn.Config(
@@ -85,3 +89,12 @@ def live_server_with_llm(tmp_path: Path) -> Iterator[LiveServer]:
         summary="A deliberately vulnerable shop to practise the OWASP Top 10.",
     )
     yield from _serve(tmp_path, delay=0.05, translator=FakeTranslator(llm_output))
+
+
+@pytest.fixture
+def live_server_unsupported(tmp_path: Path) -> Iterator[tuple[LiveServer, FakeTranslator]]:
+    translator = FakeTranslator(
+        spec(decision="unsupported", explanation="Public mail servers are out of scope.")
+    )
+    for server in _serve(tmp_path, delay=0.05, translator=translator):
+        yield server, translator

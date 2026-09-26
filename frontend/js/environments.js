@@ -1,11 +1,13 @@
 /**
  * Environments dashboard: every workspace with its live state (GET /api/environments),
- * refreshed every 5 s while the page is visible, with lifecycle actions.
+ * refreshed every 5 s while the page is visible, with lifecycle actions, every web address
+ * and the sign-in notes of its template, long after the deployment panel moved on.
  *
  * Rows are keyed by project and updated in place: a poll never destroys the button a
- * keyboard user is focused on.
+ * keyboard user is focused on, nor closes the notes someone is reading.
  */
 import { fetchEnvironments } from "./api.js";
+import { copyButton } from "./clipboard.js";
 import { el } from "./dom.js";
 import { isEnvironmentUrl } from "./environment.js";
 
@@ -40,7 +42,8 @@ export class EnvironmentsPanel {
    *           onLogs: ((environment: object) => void) | null,
    *           onRemove: (target: { project: string, volumes: string[] | null }) => void,
    *           onFollow: (job: object, environment: object) => void,
-   *           onUpdate: (environments: object[]) => void }} handlers
+   *           onUpdate: (environments: object[]) => void,
+   *           notesFor: (environment: object) => string[] }} handlers
    */
   constructor(root, handlers) {
     this.handlers = handlers;
@@ -125,7 +128,10 @@ export class EnvironmentsPanel {
       title: el("strong"),
       state: el("span", { className: "status-badge" }),
       meta: el("p", { className: "hint environment-meta" }),
-      link: el("a", { className: "environment-link", attrs: { target: "_blank", rel: "noopener noreferrer" } }),
+      links: el("ul", { className: "environment-links", attrs: { "aria-label": `Web addresses of ${project}` } }),
+      linksKey: "",
+      notesList: el("ul", { className: "notes" }),
+      notesKey: "",
       progress: button("View progress", (env) => this.handlers.onFollow(env.job, env), "button small primary"),
       logs: button("Logs", (env) => this.handlers.onLogs?.(env)),
       stop: button("Stop", (env) => this.#act(project, "stop", env)),
@@ -137,13 +143,18 @@ export class EnvironmentsPanel {
       parts[key].setAttribute("aria-label", `${label} ${project}`);
     }
     parts.logs.hidden = !this.handlers.onLogs;
+    parts.notes = el("details", { className: "environment-notes" }, [
+      el("summary", { text: "Sign-in and notes" }),
+      parts.notesList,
+    ]);
     parts.item = el("li", { className: "environment" }, [
       el("div", { className: "environment-head" }, [
         el("div", { className: "environment-title" }, [parts.title, el("code", { text: project })]),
         parts.state,
       ]),
       parts.meta,
-      parts.link,
+      parts.links,
+      parts.notes,
       el("div", { className: "environment-actions" }, [
         parts.progress, parts.logs, parts.stop, parts.start, parts.restart, parts.remove,
       ]),
@@ -181,13 +192,8 @@ export class EnvironmentsPanel {
       created && !Number.isNaN(created.getTime()) ? `created ${created.toLocaleString()}` : null,
     ].filter(Boolean).join(" · ");
 
-    const main = Array.isArray(environment.urls) ? environment.urls[0] : null;
-    const reachable = CAN_STOP.has(environment.state) && isEnvironmentUrl(main?.url);
-    row.link.hidden = !reachable;
-    if (reachable) {
-      row.link.href = main.url;
-      row.link.textContent = main.url;
-    }
+    this.#renderLinks(row, environment);
+    this.#renderNotes(row, environment);
 
     row.progress.hidden = !busy;
     row.logs.disabled = Boolean(busy) || services.length === 0;
@@ -195,5 +201,31 @@ export class EnvironmentsPanel {
     row.start.hidden = !CAN_START.has(environment.state);
     row.restart.hidden = !CAN_STOP.has(environment.state);
     for (const control of actionControls(row)) control.disabled = Boolean(busy) || environment.state === "pending";
+  }
+
+  /** Every web UI while the environment runs, main one first. Rebuilt only on change. */
+  #renderLinks(row, environment) {
+    const urls = CAN_STOP.has(environment.state) && Array.isArray(environment.urls)
+      ? environment.urls.filter((item) => typeof item?.name === "string" && isEnvironmentUrl(item?.url))
+      : [];
+    const key = JSON.stringify(urls.map((item) => [item.name, item.url]));
+    row.links.hidden = urls.length === 0;
+    if (key === row.linksKey) return;
+    row.linksKey = key;
+    row.links.replaceChildren(...urls.map((item) => el("li", {}, [
+      ...(urls.length > 1 ? [el("span", { className: "url-name", text: item.name })] : []),
+      el("a", { text: item.url, attrs: { href: item.url, target: "_blank", rel: "noopener noreferrer" } }),
+      copyButton(item.url, `Copy the address of ${item.name}`),
+    ])));
+  }
+
+  /** Default accounts and first steps from the template: still there hours later. */
+  #renderNotes(row, environment) {
+    const notes = (this.handlers.notesFor?.(environment) ?? []).filter((note) => typeof note === "string");
+    const key = JSON.stringify(notes);
+    row.notes.hidden = notes.length === 0;
+    if (key === row.notesKey) return;
+    row.notesKey = key;
+    row.notesList.replaceChildren(...notes.map((note) => el("li", { text: note })));
   }
 }

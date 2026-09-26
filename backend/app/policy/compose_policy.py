@@ -39,7 +39,7 @@ MAX_SERVICES = 12
 MAX_VOLUMES = 16
 
 # Variables the renderer always writes to the project's .env file.
-BUILTIN_VARIABLES = frozenset({"EC_PROJECT", "EC_HOSTNAME"})
+BUILTIN_VARIABLES = frozenset({"EC_PROJECT", "EC_HOSTNAME", "EC_TZ"})
 
 
 @dataclass(frozen=True)

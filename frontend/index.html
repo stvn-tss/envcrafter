@@ -10,6 +10,8 @@
   <!-- Suppresses the browser's automatic /favicon.ico request (and the console error it
        causes when unhandled) without adding a binary asset or another server route. -->
   <link rel="icon" href="data:,">
+  <!-- Classic (blocking) script: applies the theme saved in Settings before the first paint. -->
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/css/styles.css">
   <script type="module" src="/js/main.js"></script>
 </head>
@@ -17,7 +19,10 @@
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>EnvCrafter</div>
     <p class="tagline">On-demand, isolated, self-hosted environments</p>
-    <p id="engine-banner" class="engine-banner" hidden>Simulated engine: deployments are rehearsed, nothing runs in Docker.</p>
+    <div class="topbar-actions">
+      <p id="engine-banner" class="engine-banner" hidden>Simulated engine: deployments are rehearsed, nothing runs in Docker.</p>
+      <button type="button" class="button small" id="settings-open" data-icon="settings">Settings</button>
+    </div>
   </header>
 
   <main class="layout">
@@ -30,8 +35,13 @@
                     aria-describedby="prompt-hints"
                     placeholder="e.g. Deploy a test ITSM environment with a service desk and asset inventory"></textarea>
           <div id="prompt-suggestions" class="suggestions" role="group" aria-label="Example requests" hidden></div>
+          <div id="prompt-matches" class="suggestions" role="group" aria-label="Matching templates" hidden></div>
+          <p id="prompt-no-match" class="hint prompt-no-match" role="status" hidden></p>
           <p id="prompt-error" class="inline-alert" role="alert" hidden></p>
-          <p id="prompt-unavailable" class="hint prompt-unavailable" hidden></p>
+          <div id="prompt-unavailable" class="prompt-unavailable" hidden>
+            <p>AI plans need a Claude API key. Until then, what you type finds the closest templates.</p>
+            <button type="button" class="button small" id="prompt-add-key" data-icon="key">Add an API key</button>
+          </div>
           <div class="prompt-actions">
             <p id="prompt-hints" class="prompt-hints hint">
               <span>Any language works</span>
@@ -101,6 +111,7 @@
           <div class="progress-bar" id="job-progress-bar"></div>
         </div>
         <p id="job-progress-label" class="hint progress-label"></p>
+        <button type="button" class="text-button notify-offer" id="notify-offer" data-icon="bell" hidden>Notify me when it's done</button>
         <div id="job-result" class="job-result" hidden></div>
         <div class="steps-head">
           <h3>Steps</h3>
@@ -182,6 +193,53 @@
         <button type="button" class="button" data-close>Cancel</button>
         <button type="submit" form="remove-form" class="button danger-solid" id="remove-submit" disabled>Remove environment</button>
       </div>
+    </div>
+  </dialog>
+
+  <dialog id="settings-dialog" class="dialog small" aria-labelledby="settings-title">
+    <div class="dialog-header">
+      <h2 id="settings-title">Settings</h2>
+      <button type="button" class="icon-button" data-close aria-label="Close" data-icon="close"></button>
+    </div>
+    <div class="dialog-body">
+      <section class="dialog-section" aria-labelledby="settings-llm-title">
+        <h3 id="settings-llm-title">Claude API key</h3>
+        <p class="hint settings-note">Only needed to describe environments in your own words. Templates work without it.</p>
+        <p id="llm-status" class="key-status" role="status"></p>
+        <form id="llm-form" class="settings-form" novalidate>
+          <div class="field wide">
+            <label for="llm-key" id="llm-key-label">API key</label>
+            <input id="llm-key" class="input" type="password" autocomplete="off" spellcheck="false"
+                   autocapitalize="none" placeholder="sk-ant-…" maxlength="256" aria-describedby="llm-key-hint">
+            <p id="llm-key-hint" class="field-hint">Checked with the Claude API, then stored on this server only, readable by EnvCrafter alone. It is never displayed again.</p>
+          </div>
+          <p id="llm-error" class="inline-alert" role="alert" hidden></p>
+          <div class="footer-actions">
+            <button type="button" class="button danger" id="llm-remove" hidden>Remove saved key</button>
+            <button type="submit" class="button primary" id="llm-save">Save key</button>
+          </div>
+        </form>
+        <p class="hint settings-note">No key yet? Create one in the <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">Claude Console</a>.</p>
+      </section>
+      <section class="dialog-section" aria-labelledby="settings-notify-title">
+        <h3 id="settings-notify-title">Notifications</h3>
+        <label class="check-field" for="notify-toggle">
+          <input type="checkbox" id="notify-toggle">
+          <span>Notify me when a deployment ends while EnvCrafter is in the background</span>
+        </label>
+        <p id="notify-note" class="hint settings-note" hidden></p>
+      </section>
+      <section class="dialog-section" aria-labelledby="settings-theme-title">
+        <h3 id="settings-theme-title">Appearance</h3>
+        <div class="field">
+          <label for="theme-select">Theme</label>
+          <select id="theme-select" class="input">
+            <option value="system">Match the system</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </section>
     </div>
   </dialog>
 

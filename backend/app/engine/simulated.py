@@ -63,6 +63,13 @@ class SimulatedEngine:
             ]
         return result
 
+    async def recent_logs(self, stack: StackHandle, service: str, *, tail: int) -> list[LogLine]:
+        now = datetime.now(UTC)
+        return [
+            LogLine(timestamp=now, text=f"[simulated] {service}: log line {index + 1}")
+            for index in range(min(tail, 5))
+        ]
+
     async def logs(
         self, stack: StackHandle, service: str, *, tail: int
     ) -> AsyncGenerator[LogLine, None]:
