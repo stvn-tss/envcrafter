@@ -199,8 +199,8 @@ class _MutableJobs:
 
 @pytest.mark.anyio
 async def test_engine_cache_is_invalidated_when_a_job_starts_or_ends(tmp_path: Path) -> None:
-    """A lifecycle action must be visible right away, even inside the 5 s poll cache
-    (spec decision 3): the cache key includes the active job ids, not just the projects.
+    """A user's own action must show on the dashboard at once, even inside the poll cache
+    window: the cache key includes the active job ids, not just the projects.
     """
     _workspace(tmp_path, "demo")
     engine = _CountingEngine({"demo": [_status("app")]})

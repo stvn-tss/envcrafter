@@ -254,7 +254,8 @@ class DockerComposeEngine:
         return env
 
     async def _capture(self, args: list[str], *, timeout: float) -> str:  # noqa: ASYNC109
-        """Run a read-only docker command and return its (size-capped) standard output."""
+        """Run a read-only docker command and return its standard output, truncated to
+        1 MiB after capture (`communicate()` buffers the whole output first)."""
         process = await asyncio.create_subprocess_exec(
             self._docker,
             *args,
@@ -277,6 +278,7 @@ class DockerComposeEngine:
                 "%s failed: %s", _describe(args), stderr.decode("utf-8", "replace")[:500]
             )
             raise EngineError(f"`{_describe(args)}` failed (exit code {process.returncode})")
+        # Truncated, not capped: this bounds what is decoded and parsed, not what was read.
         return stdout[:_MAX_CAPTURE].decode("utf-8", "replace")
 
     async def _run(
@@ -369,7 +371,7 @@ def _parse_timestamp(value: str) -> datetime | None:
 
 async def _drain_stderr(process: asyncio.subprocess.Process, project: str, service: str) -> None:
     """Log `docker compose logs --follow`'s own stderr server-side only: paths and
-    upstream errors must never reach the browser (CLAUDE.md). Runs concurrently with
+    upstream errors go to server logs, never to the browser. Runs concurrently with
     the caller reading stdout so a chatty stderr can never fill its pipe buffer and
     stall container output; cancelled from `logs()`'s `finally` once streaming stops.
     """

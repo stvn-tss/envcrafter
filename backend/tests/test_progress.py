@@ -197,8 +197,8 @@ class _FailingStatusEngine(SimulatedEngine):
 def test_health_watcher_tolerates_status_failures(
     make_client: ClientFactory, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The spec requires the health watcher to be a sign of life only: an engine.status()
-    failure while `up --wait` runs must never fail the deployment (orchestrator.py's
+    """The health watcher is a sign of life only: an engine.status() failure while
+    `up --wait` runs must never fail the deployment (orchestrator.py's
     `_watch_health` catches and logs it, then keeps polling)."""
     engine = _FailingStatusEngine()
     monkeypatch.setattr("app.main.build_engine", lambda _settings: engine)
