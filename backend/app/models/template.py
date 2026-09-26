@@ -5,10 +5,11 @@ A template lives in `templates/<category>/<id>/` and has two files:
 * `compose.yaml`: the stack, validated by the compose policy at startup.
 """
 
+import re
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
 from app.models.common import StrictModel, TemplateId
 
@@ -29,7 +30,27 @@ ShortText = Annotated[str, StringConstraints(min_length=1, max_length=60)]
 SERVICE_NAME_PATTERN = r"^[a-z][a-z0-9-]{0,39}$"
 ServiceName = Annotated[str, StringConstraints(pattern=SERVICE_NAME_PATTERN)]
 SECRET_NAME_PATTERN = r"^[A-Z][A-Z0-9_]{2,63}$"  # noqa: S105 - a name pattern, not a secret
-SecretName = Annotated[str, StringConstraints(pattern=SECRET_NAME_PATTERN)]
+# Built-in workspace variables (EC_PROJECT, EC_HOSTNAME, EC_TZ) use this prefix. A secret
+# named like one would silently replace it in the workspace .env and escape the log
+# redaction, which skips built-in variables.
+RESERVED_SECRET_PREFIX = "EC_"  # noqa: S105 - a name prefix, not a secret
+_SECRET_NAME_RE = re.compile(SECRET_NAME_PATTERN)
+
+
+def is_valid_secret_name(name: str) -> bool:
+    """fullmatch, not match: `$` alone would also accept a trailing newline."""
+    return bool(_SECRET_NAME_RE.fullmatch(name)) and not name.startswith(RESERVED_SECRET_PREFIX)
+
+
+def _not_reserved(name: str) -> str:
+    if name.startswith(RESERVED_SECRET_PREFIX):
+        raise ValueError(f"secret names starting with {RESERVED_SECRET_PREFIX} are reserved")
+    return name
+
+
+SecretName = Annotated[
+    str, StringConstraints(pattern=SECRET_NAME_PATTERN), AfterValidator(_not_reserved)
+]
 
 
 class TemplateComponent(StrictModel):

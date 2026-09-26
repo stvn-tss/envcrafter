@@ -31,7 +31,6 @@ restart never deletes an environment.
 import asyncio
 import copy
 import logging
-import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -58,7 +57,7 @@ from app.models.deployment import (
 from app.models.environment import EnvironmentMeta, EnvironmentService, WebEndpoint
 from app.models.plan import PlanServiceView, PlanView
 from app.models.stack import Candidate, StackBlueprint
-from app.models.template import SECRET_NAME_PATTERN
+from app.models.template import is_valid_secret_name
 from app.policy.compose_policy import ComposePolicyError, PolicyContext, validate_compose
 from app.policy.images import ImageAllowlist, ImageRefError, parse_image_ref
 from app.services.event_bus import JobEventBus
@@ -81,7 +80,6 @@ logger = logging.getLogger(__name__)
 AnyDeploymentRequest = TemplateDeploymentRequest | PromptDeploymentRequest | PlanDeploymentRequest
 
 _ACTIVE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING})
-_SECRET_NAME_RE = re.compile(SECRET_NAME_PATTERN)
 # Logs copied into a failed deployment before its rollback deletes the containers.
 _FAILURE_LOG_SERVICES = 3
 _FAILURE_LOG_LINES = 30
@@ -624,7 +622,7 @@ class Orchestrator:
             source, expose = spec_to_compose_source(spec)
         except SpecConversionError as exc:
             raise StepFailedError(f"The AI plan is inconsistent: {exc}") from None
-        if not all(_SECRET_NAME_RE.match(name) for name in spec.secrets):
+        if not all(is_valid_secret_name(name) for name in spec.secrets):
             raise StepFailedError("The AI plan declares invalid secret names.")
         for service in spec.services:
             ctx.log(f"{service.name}: {service.image} - {service.purpose[:120]}")

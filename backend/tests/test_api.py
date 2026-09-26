@@ -287,3 +287,26 @@ def test_websocket_unknown_job_closes_with_4404(client: TestClient) -> None:
 def test_rejects_unknown_host_header(client: TestClient) -> None:
     response = client.get("/api/health", headers={"Host": "attacker.example"})
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize("name", ["EC_HOSTNAME", "EC_TZ", "DB_PASSWORD\n", "db_password"])
+def test_ai_secret_names_cannot_shadow_builtins_or_break_the_env_file(
+    make_client: ClientFactory, name: str
+) -> None:
+    service = {
+        "name": "db",
+        "image": "docker.io/library/mariadb:11.4.13",
+        "purpose": "db",
+        "environment": [{"name": "MARIADB_PASSWORD", "value": "${DB_PASSWORD}"}],
+        "volumes": [],
+        "depends_on": [],
+        "needs_internet": False,
+    }
+    llm_output = spec(services=[service], secrets=["DB_PASSWORD", name])
+
+    events = run_job(
+        make_client(FakeTranslator(llm_output)), {"mode": "prompt", "prompt": "a database"}
+    )
+
+    assert events[-1]["type"] == "job.failed"
+    assert events[-1]["message"] == "The AI plan declares invalid secret names."

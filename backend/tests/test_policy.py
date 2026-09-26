@@ -5,7 +5,13 @@ from typing import Any
 import pytest
 
 from app.core.config import Settings
-from app.policy.compose_policy import ComposePolicyError, PolicyContext, validate_compose
+from app.models.template import RESERVED_SECRET_PREFIX
+from app.policy.compose_policy import (
+    BUILTIN_VARIABLES,
+    ComposePolicyError,
+    PolicyContext,
+    validate_compose,
+)
 from app.policy.images import ImageAllowlist, ImageAllowlistError, parse_image_ref
 from app.policy.yaml_loader import StrictYAMLError, load_yaml
 from app.services.template_catalog import TemplateCatalog
@@ -138,3 +144,8 @@ def test_allowlist_rejects_floating_tags(tmp_path: Any) -> None:
     )
     with pytest.raises(ImageAllowlistError, match="pinned"):
         ImageAllowlist.load(path)
+
+
+def test_every_builtin_variable_uses_the_reserved_prefix() -> None:
+    """Secrets can never take a built-in name as long as builtins keep the prefix."""
+    assert all(name.startswith(RESERVED_SECRET_PREFIX) for name in BUILTIN_VARIABLES)

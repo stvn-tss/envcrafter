@@ -158,3 +158,16 @@ def test_every_web_interface_has_a_healthcheck(allowlist: ImageAllowlist) -> Non
         if template.compose.services[exposed.service].healthcheck is None
     ]
     assert missing == []
+
+
+@pytest.mark.parametrize("name", ["EC_TZ", "EC_CUSTOM"])
+def test_template_secrets_cannot_use_the_reserved_prefix(
+    tmp_path: Path, allowlist: ImageAllowlist, name: str
+) -> None:
+    root = catalog_with(tmp_path, logo_name=None)
+    path = root / SHOP / "manifest.yaml"
+    manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    manifest["secrets"] = [name]
+    path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+    with pytest.raises(TemplateCatalogError, match="reserved"):
+        TemplateCatalog.load(root, allowlist)

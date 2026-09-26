@@ -46,8 +46,9 @@ Custom stack rules:
 - Service names and volume names: lowercase letters, digits and dashes, starting
   with a letter. Mount volumes at absolute container paths.
 - Never write passwords or keys. Declare secret names in "secrets"
-  (UPPER_SNAKE_CASE, e.g. DB_PASSWORD) and reference them as ${NAME} in
-  environment values. EnvCrafter generates a random value for each secret.
+  (UPPER_SNAKE_CASE, e.g. DB_PASSWORD; names starting with EC_ are reserved) and
+  reference them as ${NAME} in environment values. EnvCrafter generates a random
+  value for each secret.
 - Environment values must not contain "$" except in ${NAME} secret references and
   these built-in values: ${EC_TZ} (the user's time zone, e.g. for TZ or PHP_TZ) and
   ${EC_HOSTNAME} (the host name of the main web UI).
