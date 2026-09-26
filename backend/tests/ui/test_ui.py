@@ -274,4 +274,3 @@ def test_template_dialog_shows_what_the_deployment_needs(
     page.get_by_role("button", name="Details of Media Stack").click()
     expect(dialog).to_contain_text("All 5 images are already downloaded")
     assert errors == []
-
