@@ -1,9 +1,11 @@
 import os
+from typing import Literal
 
 import pytest
 from axe_playwright_python.sync_playwright import Axe
 from playwright.sync_api import Page, expect
 
+from tests.conftest import FakeTranslator
 from tests.ui.conftest import LiveServer
 
 pytestmark = pytest.mark.skipif(
@@ -28,17 +30,126 @@ def deploy_template(page: Page, name: str, project: str) -> None:
     page.locator("#dialog-deploy").click()
 
 
-def test_home_loads_cleanly_and_passes_axe(page: Page, live_server: LiveServer) -> None:
-    errors = open_home(page, live_server)
-    expect(page.locator("#engine-banner")).to_be_visible()
-    expect(page.locator("#prompt-input")).to_be_disabled()
-    expect(page.locator("#prompt-unavailable")).to_contain_text("ENVCRAFTER_LLM_API_KEY")
-
+def serious_violations(page: Page) -> list[str]:
     results = Axe().run(page)
-    serious = [
+    return [
         v["id"] for v in results.response["violations"] if v["impact"] in {"serious", "critical"}
     ]
-    assert serious == []
+
+
+@pytest.mark.parametrize("color_scheme", ["light", "dark"])
+def test_home_loads_cleanly_and_passes_axe(
+    page: Page, live_server: LiveServer, color_scheme: Literal["light", "dark"]
+) -> None:
+    page.emulate_media(color_scheme=color_scheme)
+    errors = open_home(page, live_server)
+    expect(page.locator("#engine-banner")).to_be_visible()
+    # Without a key the request form still works: it searches the catalog.
+    expect(page.locator("#prompt-input")).to_be_enabled()
+    expect(page.locator("#prompt-unavailable")).to_contain_text("Claude API key")
+    expect(page.get_by_role("button", name="Find templates")).to_be_visible()
+
+    assert serious_violations(page) == []
+    page.get_by_role("button", name="Settings").click()
+    expect(page.locator("#settings-dialog")).to_be_visible()
+    assert serious_violations(page) == []
+    assert errors == []
+
+
+def test_without_a_key_the_request_finds_templates(page: Page, live_server: LiveServer) -> None:
+    errors = open_home(page, live_server)
+    page.locator("#prompt-input").fill("Supervision réseau avec alertes")
+
+    match = page.locator("#prompt-matches").get_by_role("button", name="Open Zabbix")
+    expect(match).to_be_visible()
+    match.click()
+    expect(page.locator("#template-dialog")).to_be_visible()
+    expect(page.locator("#dialog-title")).to_have_text("Zabbix")
+    page.locator("#dialog-cancel").click()
+
+    page.locator("#prompt-input").fill("kubernetes cluster")
+    page.get_by_role("button", name="Find templates").click()
+    expect(page.locator("#prompt-no-match")).to_be_visible()
+    assert errors == []
+
+
+def test_api_key_saved_from_settings_turns_ai_plans_on(page: Page, live_server: LiveServer) -> None:
+    errors = open_home(page, live_server)
+    page.get_by_role("button", name="Add an API key").click()
+    dialog = page.locator("#settings-dialog")
+    expect(dialog.locator("#llm-status")).to_contain_text("No key")
+    expect(dialog.locator("#llm-key")).to_be_focused()
+
+    dialog.locator("#llm-key").fill("not a key")
+    dialog.get_by_role("button", name="Save key").click()
+    expect(dialog.locator("#llm-error")).to_contain_text("Paste the whole key")
+
+    dialog.locator("#llm-key").fill("sk-ant-api03-rejected-by-the-fake-api")
+    dialog.get_by_role("button", name="Save key").click()
+    expect(dialog.locator("#llm-error")).to_contain_text("rejected this key")
+
+    dialog.locator("#llm-key").fill("sk-ant-api03-accepted-by-the-fake-a1b2")
+    dialog.get_by_role("button", name="Save key").click()
+    expect(dialog.locator("#llm-status")).to_contain_text("key ending …a1b2")
+    expect(dialog.locator("#llm-key")).to_have_value("")
+    dialog.locator("[data-close]").click()
+    expect(page.get_by_role("button", name="Generate plan")).to_be_visible()
+    expect(page.locator("#prompt-unavailable")).to_be_hidden()
+
+    page.reload()  # the key is kept by the server, not by the page
+    expect(page.get_by_role("button", name="Generate plan")).to_be_visible()
+    page.get_by_role("button", name="Settings").click()
+    page.get_by_role("button", name="Remove saved key").click()
+    expect(dialog.locator("#llm-status")).to_contain_text("No key")
+    dialog.locator("[data-close]").click()
+    expect(page.get_by_role("button", name="Find templates")).to_be_visible()
+    # The browser itself logs the refused key's HTTP 400; nothing else may fail.
+    assert [error for error in errors if "400 (Bad Request)" not in error] == []
+
+
+def test_theme_can_be_pinned_in_settings(page: Page, live_server: LiveServer) -> None:
+    page.emulate_media(color_scheme="light")
+    open_home(page, live_server)
+    page.get_by_role("button", name="Settings").click()
+    page.locator("#theme-select").select_option("dark")
+    page.reload()  # applied by theme.js before the first paint
+    expect(page.locator("html")).to_have_attribute("data-theme", "dark")
+    page.get_by_role("button", name="Settings").click()
+    page.locator("#theme-select").select_option("system")
+    expect(page.locator("html")).not_to_have_attribute("data-theme", "dark")
+
+
+def test_dashboard_keeps_every_address_and_the_sign_in_notes(
+    page: Page, live_server: LiveServer
+) -> None:
+    errors = open_home(page, live_server)
+    deploy_template(page, "Media Stack", "media")
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+
+    row = page.locator(".environment", has=page.locator("code", has_text="media"))
+    links = row.locator(".environment-links a")
+    expect(links).to_have_count(5, timeout=15_000)
+    expect(links.first).to_have_text("http://media.localhost")
+    expect(row.locator(".environment-links")).to_contain_text("http://sonarr.media.localhost")
+    row.get_by_text("Sign-in and notes").click()
+    expect(row.locator(".environment-notes")).to_contain_text("Jellyfin opens a setup wizard")
+    assert errors == []
+
+
+def test_a_failed_analysis_can_be_retried(
+    page: Page, live_server_unsupported: tuple[LiveServer, FakeTranslator]
+) -> None:
+    server, translator = live_server_unsupported
+    errors = open_home(page, server)
+    page.locator("#prompt-input").fill("A mail server open to the Internet")
+    page.get_by_role("button", name="Generate plan").click()
+    expect(page.locator("#status-badge")).to_have_text("Failed", timeout=15_000)
+
+    page.locator("#job-result").get_by_role("button", name="Retry").click()
+
+    expect(page.locator("#status-badge")).to_have_text("Failed", timeout=15_000)
+    expect(page.locator("#job-result").get_by_role("button", name="Retry")).to_be_visible()
+    assert translator.prompts == ["A mail server open to the Internet"] * 2
     assert errors == []
 
 

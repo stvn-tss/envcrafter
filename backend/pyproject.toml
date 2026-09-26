@@ -3,6 +3,7 @@ name = "envcrafter-backend"
 version = "0.3.0"
 description = "EnvCrafter API & orchestrator: on-demand, isolated, self-hosted environments."
 requires-python = ">=3.12"
+license = "MIT"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -10,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2.5",
     "pyyaml>=6.0.2",
     "anthropic>=1.0",
+    "tzdata>=2025.2",
 ]
 
 [dependency-groups]

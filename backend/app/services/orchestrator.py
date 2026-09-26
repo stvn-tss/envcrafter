@@ -20,9 +20,12 @@ Other job modes:
 
 Only a deployment mode (template, prompt, plan) rolls back: a failure after the
 workspace step removes the project (containers, networks, volumes and workspace),
-so no half-deployed stack is left behind. The job stays active until its rollback
-is over, so no other job can start on the project meanwhile. Removal and lifecycle
-jobs never roll back: a failed stop, start or restart never deletes an environment.
+so no half-deployed stack is left behind. When the containers themselves failed to
+start, the last log lines of the services that never became ready are copied into
+the job first (secrets redacted): the rollback deletes the containers and their logs.
+The job stays active until its rollback is over, so no other job can start on the
+project meanwhile. Removal and lifecycle jobs never roll back: a failed stop, start or
+restart never deletes an environment.
 """
 
 import asyncio
@@ -39,6 +42,7 @@ from uuid import UUID, uuid4
 import yaml
 
 from app.core.config import Settings
+from app.core.timezones import is_known_timezone
 from app.engine.base import Engine, EngineError, ServiceStatus, StackHandle
 from app.models.common import DEPLOY_MODES, JobMode
 from app.models.deployment import (
@@ -58,6 +62,7 @@ from app.models.template import SECRET_NAME_PATTERN
 from app.policy.compose_policy import ComposePolicyError, PolicyContext, validate_compose
 from app.policy.images import ImageAllowlist, ImageRefError, parse_image_ref
 from app.services.event_bus import JobEventBus
+from app.services.log_streams import redact
 from app.services.plan_store import PlanStore, StoredPlan
 from app.services.template_catalog import Template, TemplateCatalog
 from app.translator.client import Translator, TranslatorError
@@ -77,6 +82,11 @@ AnyDeploymentRequest = TemplateDeploymentRequest | PromptDeploymentRequest | Pla
 
 _ACTIVE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING})
 _SECRET_NAME_RE = re.compile(SECRET_NAME_PATTERN)
+# Logs copied into a failed deployment before its rollback deletes the containers.
+_FAILURE_LOG_SERVICES = 3
+_FAILURE_LOG_LINES = 30
+_FAILURE_LOG_LINE_LENGTH = 300
+_FAILURE_LOG_TIMEOUT_SECONDS = 30
 
 
 def job_events_url(job_id: UUID) -> str:
@@ -114,6 +124,9 @@ class Job:
     project_name: str | None
     request: AnyDeploymentRequest | None = None
     template: Template | None = None
+    # The translator of the key in use when the job was accepted: changing the key in
+    # Settings never swaps it under a running analysis.
+    translator: Translator | None = None
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     url: str | None = None
@@ -236,6 +249,10 @@ class Orchestrator:
         """True when natural-language requests can be served."""
         return self._translator is not None
 
+    def set_translator(self, translator: Translator | None) -> None:
+        """Use another translator (a key saved or removed in Settings) for new jobs."""
+        self._translator = translator
+
     async def submit(self, request: AnyDeploymentRequest) -> Job:
         """Check business rules, register the job and schedule its pipeline.
 
@@ -266,6 +283,7 @@ class Orchestrator:
             template=template,
             prompt=request.prompt if isinstance(request, PromptDeploymentRequest) else None,
             plan_id=stored.view.plan_id if stored is not None else None,
+            translator=self._translator if isinstance(request, PromptDeploymentRequest) else None,
         )
         await self._reserve(job, must_exist=False)
 
@@ -296,7 +314,13 @@ class Orchestrator:
         """Analyse and validate a request into a stored plan; nothing is deployed."""
         if self._translator is None:
             raise TranslatorUnavailableError
-        job = Job(id=uuid4(), mode="planning", project_name=None, prompt=request.prompt)
+        job = Job(
+            id=uuid4(),
+            mode="planning",
+            project_name=None,
+            prompt=request.prompt,
+            translator=self._translator,
+        )
         self._jobs[job.id] = job  # no project to reserve
         return self._launch(
             job,
@@ -439,10 +463,44 @@ class Orchestrator:
         try:
             # Only a deployment rolls back: a failed stop or start never deletes an environment.
             if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
+                if ctx.step.key == "container_deploy":
+                    await self._report_unready_services(job.stack, ctx)
                 await self._rollback(job.stack, ctx)
         finally:
             job.status = JobStatus.FAILED
         self._publish_failure(job, ctx, message)
+
+    async def _report_unready_services(self, stack: StackHandle, ctx: StepContext) -> None:
+        """Copy the last log lines of every service that did not become ready into the job,
+        before the rollback deletes the containers: "startup failed" alone has no cause.
+
+        Best effort and bounded in time: it never delays or prevents the rollback. Secrets
+        are redacted exactly as in the logs viewer; if they cannot be read, nothing is shown.
+        """
+        try:
+            async with asyncio.timeout(_FAILURE_LOG_TIMEOUT_SECONDS):
+                observed = (await self._engine.status([stack])).get(stack.project, [])
+                unready = [status for status in observed if not is_ready(status)]
+                if not unready:
+                    return
+                secret_values = await asyncio.to_thread(
+                    self._workspaces.read_secret_values, stack.project
+                )
+                for status in unready[:_FAILURE_LOG_SERVICES]:
+                    lines = await self._engine.recent_logs(
+                        stack, status.service, tail=_FAILURE_LOG_LINES
+                    )
+                    state = status.health if status.health else status.state
+                    ctx.log(f"Last log lines of {status.service} ({state}):")
+                    for line in lines:
+                        text = redact(line.text, secret_values)[:_FAILURE_LOG_LINE_LENGTH]
+                        ctx.log(f"  {status.service} | {text}")
+                    if not lines:
+                        ctx.log(f"  {status.service} | (no output)")
+        except Exception:
+            logger.warning(
+                "Could not read the logs of %s before rollback", stack.project, exc_info=True
+            )
 
     async def _rollback(self, stack: StackHandle, ctx: StepContext) -> None:
         ctx.log("Rolling back: removing everything created for this project")
@@ -544,12 +602,12 @@ class Orchestrator:
         )
 
     async def _translate(self, ctx: StepContext) -> None:
-        prompt = ctx.job.prompt
-        if self._translator is None or prompt is None:
+        prompt, translator = ctx.job.prompt, ctx.job.translator
+        if translator is None or prompt is None:
             raise RuntimeError("AI step scheduled without a translator or a prompt")
 
-        ctx.log(f"Asking {self._translator.model} for a deployment plan")
-        spec = await self._translator.translate(prompt)
+        ctx.log(f"Asking {translator.model} for a deployment plan")
+        spec = await translator.translate(prompt)
         ctx.job.spec = spec
         ctx.log(f"Plan: {spec.title[:80]} - {spec.summary[:240]}")
 
@@ -693,6 +751,7 @@ class Orchestrator:
         variables = {
             "EC_PROJECT": project,
             "EC_HOSTNAME": web_hostname(project, domain),
+            "EC_TZ": self._timezone(ctx),
             **WorkspaceManager.generate_secrets(blueprint.secrets),
         }
         workspace = await self._workspaces.create(
@@ -708,6 +767,16 @@ class Orchestrator:
             f"Workspace '{project}' written: compose.yaml and .env "
             f"({len(blueprint.secrets)} generated secret(s), owner-only permissions)"
         )
+
+    def _timezone(self, ctx: StepContext) -> str:
+        """The browser's time zone when the server knows it, else the configured default."""
+        requested = ctx.job.request.timezone if ctx.job.request is not None else None
+        if requested is not None and is_known_timezone(requested):
+            ctx.log(f"Time zone: {requested}")
+            return requested
+        if requested is not None:
+            ctx.log(f"Unknown time zone '{requested}': using {self._settings.timezone}")
+        return self._settings.timezone
 
     async def _pull_images(self, ctx: StepContext) -> None:
         await self._engine.pull(self._stack(ctx), ctx.log, ctx.progress)
@@ -813,11 +882,16 @@ class Orchestrator:
         return ctx.job.stack
 
 
+def is_ready(status: ServiceStatus) -> bool:
+    """Running, and healthy or without a healthcheck."""
+    return status.state == "running" and status.health in (None, "healthy")
+
+
 def health_summary(
     expected: Sequence[str], observed: Sequence[ServiceStatus]
 ) -> tuple[int | None, str]:
     """(percent, message) for the health watcher: ready = running and not unhealthy/starting."""
-    ready = {s.service for s in observed if s.state == "running" and s.health in (None, "healthy")}
+    ready = {s.service for s in observed if is_ready(s)}
     waiting = [name for name in expected if name not in ready]
     total = len(expected)
     message = f"{total - len(waiting)} of {total} services ready"

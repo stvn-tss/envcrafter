@@ -41,7 +41,7 @@ access_notes:
   - "Inside the stack, services reach each other by name: http://sonarr:8989, http://radarr:7878, http://prowlarr:9696, http://qbittorrent:8080."
   - "qBittorrent prints a temporary password for the admin user in its logs: open the environment's Logs and select qBittorrent."
   - Only download content you have the right to download.
-tags: [media, multimedia, jellyfin, sonarr, radarr, prowlarr, qbittorrent, streaming, arr]
+tags: [media, multimedia, jellyfin, sonarr, radarr, prowlarr, qbittorrent, streaming, arr, movies, films, series, tv, torrent]
 footprint:
   download_mb: 1048
   memory_mb: 750

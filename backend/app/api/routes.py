@@ -1,12 +1,20 @@
-"""REST endpoints: health, template catalog, deployment jobs and the environment inventory."""
+"""REST endpoints: health, template catalog, deployment jobs, the environment inventory
+and the settings changed from the UI."""
 
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Response, status
+from pydantic import SecretStr
 
 from app import __version__
-from app.api.deps import CatalogDep, InventoryDep, OrchestratorDep, SettingsDep
+from app.api.deps import (
+    CatalogDep,
+    InventoryDep,
+    LLMSettingsDep,
+    OrchestratorDep,
+    SettingsDep,
+)
 from app.core.security import require_trusted_json_request, require_trusted_origin
 from app.models.capabilities import CapabilitiesResponse
 from app.models.common import PROJECT_NAME_PATTERN, TEMPLATE_ID_PATTERN
@@ -19,7 +27,9 @@ from app.models.deployment import (
 )
 from app.models.environment import EnvironmentListResponse, EnvironmentView
 from app.models.plan import PlanView
+from app.models.settings import LLMKeyRequest, SettingsView
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
+from app.services.llm_settings import SettingsStorageError
 from app.services.orchestrator import (
     Job,
     ProjectNameConflictError,
@@ -29,10 +39,11 @@ from app.services.orchestrator import (
     UnknownTemplateError,
     job_events_url,
 )
+from app.translator.client import KeyRejectedError, TranslatorError
 
 router = APIRouter(prefix="/api")
 
-_LLM_UNAVAILABLE = "Natural-language requests need an LLM API key (ENVCRAFTER_LLM_API_KEY)."
+_LLM_UNAVAILABLE = "Natural-language requests need a Claude API key: add one in Settings."
 
 
 def _summary(job: Job) -> JobSummary:
@@ -222,3 +233,36 @@ async def remove_environment(
             status.HTTP_409_CONFLICT, "A job is already running for this environment"
         ) from None
     return _summary(job)
+
+
+@router.get("/settings")
+async def get_app_settings(llm: LLMSettingsDep) -> SettingsView:
+    """Whether a Claude API key is configured and where it comes from; never the key."""
+    return SettingsView(llm=llm.status())
+
+
+@router.put("/settings/llm-key", dependencies=[Depends(require_trusted_json_request)])
+async def save_llm_key(payload: LLMKeyRequest, llm: LLMSettingsDep) -> SettingsView:
+    """Check a Claude API key with the API, then store it for this server and use it.
+
+    400: the API refused the key (or the configured model); 502: the API could not be
+    asked (network, outage); 500: the settings file cannot be written. In every case
+    nothing is stored and the key in use does not change."""
+    try:
+        status_view = await llm.save_key(SecretStr(payload.api_key))
+    except KeyRejectedError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    except TranslatorError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from None
+    except SettingsStorageError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from None
+    return SettingsView(llm=status_view)
+
+
+@router.delete("/settings/llm-key", dependencies=[Depends(require_trusted_origin)])
+async def remove_llm_key(llm: LLMSettingsDep) -> SettingsView:
+    """Forget the key saved from the UI; ENVCRAFTER_LLM_API_KEY, if set, is used again."""
+    try:
+        return SettingsView(llm=await llm.remove_key())
+    except SettingsStorageError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from None

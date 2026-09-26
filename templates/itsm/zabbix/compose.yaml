@@ -8,7 +8,7 @@ services:
       MYSQL_DATABASE: zabbix
       MYSQL_USER: zabbix
       MYSQL_PASSWORD: ${DB_PASSWORD}
-      PHP_TZ: Etc/UTC
+      PHP_TZ: ${EC_TZ}
     depends_on:
       zabbix-server:
         condition: service_started

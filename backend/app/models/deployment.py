@@ -11,6 +11,7 @@ from uuid import UUID
 
 from pydantic import AfterValidator, BaseModel, Field, RootModel, StringConstraints
 
+from app.core.timezones import TIMEZONE_PATTERN
 from app.models.common import JobMode, ProjectName, StrictModel, TemplateId
 from app.models.environment import WebEndpoint
 
@@ -48,6 +49,11 @@ Prompt = Annotated[
     AfterValidator(_reject_invisible_characters),
 ]
 
+# The browser's IANA time zone ("Europe/Paris"), written to the workspace as ${EC_TZ}. Only
+# the syntax is checked here: a well-formed name the server's tz database does not know
+# falls back to the server default instead of failing the deployment.
+TimeZoneName = Annotated[str, StringConstraints(max_length=64, pattern=TIMEZONE_PATTERN)]
+
 
 class TemplateDeploymentRequest(StrictModel):
     mode: Literal["template"]
@@ -55,6 +61,7 @@ class TemplateDeploymentRequest(StrictModel):
     # allow-list and is never used to build a filesystem path directly.
     template_id: TemplateId
     project_name: ProjectName | None = None
+    timezone: TimeZoneName | None = None
 
 
 class PromptDeploymentRequest(StrictModel):
@@ -64,6 +71,7 @@ class PromptDeploymentRequest(StrictModel):
     # own schema + policy validation before anything is written or executed.
     prompt: Prompt
     project_name: ProjectName | None = None
+    timezone: TimeZoneName | None = None
 
 
 class PlanRequest(StrictModel):
@@ -78,6 +86,7 @@ class PlanDeploymentRequest(StrictModel):
     mode: Literal["plan"]
     plan_id: UUID
     project_name: ProjectName | None = None
+    timezone: TimeZoneName | None = None
 
 
 class DeploymentRequest(

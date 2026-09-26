@@ -1,5 +1,6 @@
 # Source stack: networks, names and routing are added by EnvCrafter's renderer.
 # Every service needs outbound access (metadata, indexers, downloads): egress.
+# The linuxserver.io images ship curl; the Servarr apps answer /ping without signing in.
 services:
   jellyfin:
     image: jellyfin/jellyfin:10.11.11
@@ -22,44 +23,68 @@ services:
     environment:
       PUID: "1000"
       PGID: "1000"
-      TZ: Etc/UTC
+      TZ: ${EC_TZ}
     volumes:
       - sonarr-config:/config
       - media:/data
     networks: [internal, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8989/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 2m
 
   radarr:
     image: lscr.io/linuxserver/radarr:6.4.4
     environment:
       PUID: "1000"
       PGID: "1000"
-      TZ: Etc/UTC
+      TZ: ${EC_TZ}
     volumes:
       - radarr-config:/config
       - media:/data
     networks: [internal, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7878/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 2m
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:2.6.5
     environment:
       PUID: "1000"
       PGID: "1000"
-      TZ: Etc/UTC
+      TZ: ${EC_TZ}
     volumes:
       - prowlarr-config:/config
     networks: [internal, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9696/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 2m
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:5.2.3
     environment:
       PUID: "1000"
       PGID: "1000"
-      TZ: Etc/UTC
+      TZ: ${EC_TZ}
       WEBUI_PORT: "8080"
     volumes:
       - qbittorrent-config:/config
       - media:/data
     networks: [internal, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://localhost:8080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 2m
 
 volumes:
   media:

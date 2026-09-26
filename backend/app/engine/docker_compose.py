@@ -180,6 +180,23 @@ class DockerComposeEngine:
         observed = parse_ps_output(output)
         return {project: observed.get(project, []) for project in wanted}
 
+    async def recent_logs(self, stack: StackHandle, service: str, *, tail: int) -> list[LogLine]:
+        output = await self._capture(
+            self._compose(
+                stack,
+                "logs",
+                "--no-color",
+                "--no-log-prefix",
+                "--timestamps",
+                "--tail",
+                str(tail),
+                service,
+            ),
+            timeout=20,
+        )
+        lines = (parse_log_line(raw) for raw in output.splitlines())
+        return [line for line in lines if line is not None]
+
     async def logs(
         self, stack: StackHandle, service: str, *, tail: int
     ) -> AsyncGenerator[LogLine, None]:

@@ -3,13 +3,15 @@
 from types import SimpleNamespace
 from typing import Any
 
+import anthropic
+import httpx2
 import pytest
 from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.policy.images import ImageAllowlist
 from app.services.template_catalog import TemplateCatalog
-from app.translator.client import LLMTranslator, TranslatorError
+from app.translator.client import KeyRejectedError, LLMTranslator, TranslatorError
 from app.translator.spec import SpecConversionError, spec_to_compose_source
 from tests.conftest import spec
 
@@ -120,3 +122,74 @@ def test_spec_conversion_builds_logical_networks() -> None:
 
     with pytest.raises(SpecConversionError):
         spec_to_compose_source(spec(services=[service, service]))
+
+
+class _StubModels:
+    def __init__(self, effect: Exception | None) -> None:
+        self.effect = effect
+        self.retrieved: list[str] = []
+        self.options: dict[str, Any] = {}
+
+    async def retrieve(self, model_id: str) -> Any:
+        self.retrieved.append(model_id)
+        if self.effect is not None:
+            raise self.effect
+        return SimpleNamespace(id=model_id)
+
+
+def _verifier(allowlist: ImageAllowlist, effect: Exception | None) -> tuple[LLMTranslator, Any]:
+    models = _StubModels(effect)
+
+    def with_options(**options: Any) -> Any:
+        models.options = options
+        return SimpleNamespace(models=models)
+
+    client = SimpleNamespace(with_options=with_options)
+    translator = LLMTranslator(
+        api_key=SecretStr("test"),
+        model="claude-opus-5-5",
+        effort="high",
+        timeout=180,
+        catalog=TemplateCatalog.load(Settings().templates_dir, allowlist),
+        allowlist=allowlist,
+        client=client,  # type: ignore[arg-type]
+    )
+    return translator, models
+
+
+_REQUEST = httpx2.Request("GET", "https://api.anthropic.com/v1/models/claude-opus-5-5")
+
+
+def _status_error(cls: type[anthropic.APIStatusError], code: int) -> anthropic.APIStatusError:
+    return cls("error", response=httpx2.Response(code, request=_REQUEST), body=None)
+
+
+async def test_verify_retrieves_the_model_quickly(allowlist: ImageAllowlist) -> None:
+    translator, models = _verifier(allowlist, None)
+    await translator.verify()
+    assert models.retrieved == ["claude-opus-5-5"]
+    assert models.options["timeout"] <= 15 and models.options["max_retries"] <= 1
+
+
+@pytest.mark.parametrize(
+    ("effect", "rejected", "message"),
+    [
+        (_status_error(anthropic.AuthenticationError, 401), True, "rejected this key"),
+        (_status_error(anthropic.PermissionDeniedError, 403), True, "rejected this key"),
+        (_status_error(anthropic.NotFoundError, 404), True, "cannot use the model"),
+        (anthropic.APIConnectionError(request=_REQUEST), False, "unreachable"),
+        (_status_error(anthropic.InternalServerError, 500), False, "returned an error"),
+    ],
+)
+async def test_verify_explains_every_failure(
+    allowlist: ImageAllowlist, effect: Exception, rejected: bool, message: str
+) -> None:
+    translator, _ = _verifier(allowlist, effect)
+    with pytest.raises(TranslatorError, match=message) as exc_info:
+        await translator.verify()
+    assert isinstance(exc_info.value, KeyRejectedError) is rejected
+
+
+async def test_a_rate_limited_key_is_a_valid_key(allowlist: ImageAllowlist) -> None:
+    translator, _ = _verifier(allowlist, _status_error(anthropic.RateLimitError, 429))
+    await translator.verify()

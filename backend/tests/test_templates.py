@@ -146,3 +146,15 @@ def test_footprint_is_required(tmp_path: Path, allowlist: ImageAllowlist) -> Non
     path.write_text(yaml.safe_dump(manifest), encoding="utf-8")
     with pytest.raises(TemplateCatalogError, match="footprint"):
         TemplateCatalog.load(root, allowlist)
+
+
+def test_every_web_interface_has_a_healthcheck(allowlist: ImageAllowlist) -> None:
+    """Without one, `compose up --wait` reports a web UI as ready before it answers."""
+    catalog = TemplateCatalog.load(REAL_TEMPLATES, allowlist)
+    missing = [
+        f"{template.manifest.id}/{exposed.service}"
+        for template in catalog.all()
+        for exposed in template.manifest.expose
+        if template.compose.services[exposed.service].healthcheck is None
+    ]
+    assert missing == []

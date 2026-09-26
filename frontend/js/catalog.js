@@ -28,6 +28,62 @@ export function footprintItems(template) {
 
 const LOGO_URL = /^\/api\/templates\/[a-z0-9-]+\/logo$/;
 
+/** Lowercase, without accents: "Supervision réseau" matches "reseau" and vice versa. */
+export function normalize(text) {
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/** Everything a search can match: name, summary, category, tags, component names. */
+function haystack(template, categoryLabel) {
+  return normalize([
+    template.name,
+    template.summary,
+    categoryLabel(template.category),
+    ...template.tags,
+    ...template.components.map((component) => component.name),
+  ].join(" "));
+}
+
+// Words that say nothing about what to deploy (English and French requests).
+const STOP_WORDS = new Set((
+  "the and for with want would like need needs some that this from into your mine please " +
+  "deploy deployment install environment environments app apps application applications " +
+  "server servers tool tools stack test tests testing local machine small simple " +
+  "les des une pour avec veux voudrais besoin dans sur qui que mon mes nos vos faire " +
+  "deployer installer environnement environnements serveur serveurs outil outils " +
+  "tester teste petit petite simple"
+).split(" "));
+
+/**
+ * Templates closest to a free-text request, best first. Each meaningful word counts once,
+ * matched on its first five letters ("inventaire" finds "inventory") or inside a longer
+ * word ("desk" finds "servicedesk"). Used when AI plans are off.
+ */
+export function rankTemplates(templates, text, categoryLabel, limit = 3) {
+  const terms = [...new Set(normalize(text).split(/[^a-z0-9]+/))]
+    .filter((term) => term.length >= 3 && !STOP_WORDS.has(term));
+  if (!terms.length) return [];
+  return templates
+    .map((template) => {
+      const words = haystack(template, categoryLabel).split(/[^a-z0-9]+/).filter(Boolean);
+      const name = normalize(template.name);
+      let score = 0;
+      for (const term of terms) {
+        const stem = term.slice(0, 5);
+        if (words.some((word) => word.startsWith(stem) || (term.length >= 4 && word.includes(term)))) {
+          score += name.includes(term) ? 2 : 1;
+        }
+      }
+      return { template, score };
+    })
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score)
+    // Drop weak matches next to a strong one: one shared word ("web") is not a suggestion.
+    .filter(({ score }, _, [best]) => score * 2 >= best.score)
+    .slice(0, limit)
+    .map(({ template }) => template);
+}
+
 /** The application logo when the template ships one, else the category monogram. */
 export function appIcon(template, size = "") {
   const fallback = monogram(template, size);
@@ -117,13 +173,7 @@ export class Catalog {
     this.#entries = templates.map((template) => ({
       template,
       card: this.#card(template),
-      haystack: [
-        template.name,
-        template.summary,
-        this.categoryLabel(template.category),
-        ...template.tags,
-        ...template.components.map((component) => component.name),
-      ].join(" ").toLowerCase(),
+      haystack: haystack(template, this.categoryLabel),
     }));
     this.grid.replaceChildren(...this.#entries.map((entry) => entry.card));
     this.grid.setAttribute("aria-busy", "false");
@@ -161,7 +211,7 @@ export class Catalog {
   }
 
   #apply() {
-    const terms = this.search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const terms = normalize(this.search.value.trim()).split(/\s+/).filter(Boolean);
     let visible = 0;
     for (const { template, card, haystack } of this.#entries) {
       const shown =

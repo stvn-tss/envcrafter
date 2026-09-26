@@ -84,7 +84,8 @@ services:
     image: envcrafter-api:local
     container_name: envcrafter-api
     env_file:
-      # Optional: holds ENVCRAFTER_LLM_API_KEY. Never baked into the image.
+      # Optional: can hold ENVCRAFTER_LLM_API_KEY. Never baked into the image. A key saved
+      # from the UI (Settings) lives in the settings volume instead and takes precedence.
       - path: ../.env
         required: false
     environment:
@@ -97,6 +98,7 @@ services:
     tmpfs: [/tmp]
     volumes:
       - workspaces:/data/workspaces
+      - settings:/data/settings
     labels:
       envcrafter.managed: "true"
       traefik.enable: "true"
@@ -142,3 +144,6 @@ networks:
 volumes:
   workspaces:
     name: envcrafter-workspaces
+  # Settings saved from the UI, including the Claude API key (owner-only file).
+  settings:
+    name: envcrafter-settings

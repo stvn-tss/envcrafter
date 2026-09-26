@@ -268,3 +268,25 @@ async def test_logs_keeps_stderr_out_of_the_client_stream_and_logs_it_server_sid
     assert "connection refused" in server_log
     assert "exited with code 1" in server_log
     assert not process.killed  # the process exited on its own; nothing to kill
+
+
+@pytest.mark.anyio
+async def test_recent_logs_reads_a_bounded_tail_without_following(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine()
+    argv: list[list[str]] = []
+
+    async def capture(args: list[str], *, timeout: float) -> str:  # noqa: ASYNC109
+        argv.append(args)
+        return "2026-09-26T10:00:00.123456789Z \x1b[31mboom\x1b[0m\n\n2026-09-26T10:00:01Z bye\n"
+
+    monkeypatch.setattr(engine, "_capture", capture)
+
+    lines = await engine.recent_logs(_stack(tmp_path), "app", tail=30)
+
+    assert [line.text for line in lines] == ["boom", "bye"]
+    assert lines[0].timestamp is not None
+    [args] = argv
+    assert args[-3:] == ["--tail", "30", "app"]
+    assert "--follow" not in args

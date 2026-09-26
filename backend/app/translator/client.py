@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 # `fallbacks: "default"` retries a safety-classifier refusal on the model
 # Anthropic recommends for that refusal category, inside the same call.
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# Checking a key is a metadata call: fail fast instead of waiting for the planning timeout.
+_VERIFY_TIMEOUT_SECONDS = 15.0
 
 _RULES = """\
 You are the planning component of EnvCrafter, a self-hosted platform that deploys
@@ -46,7 +48,9 @@ Custom stack rules:
 - Never write passwords or keys. Declare secret names in "secrets"
   (UPPER_SNAKE_CASE, e.g. DB_PASSWORD) and reference them as ${NAME} in
   environment values. EnvCrafter generates a random value for each secret.
-- Environment values must not contain "$" except in ${NAME} secret references.
+- Environment values must not contain "$" except in ${NAME} secret references and
+  these built-in values: ${EC_TZ} (the user's time zone, e.g. for TZ or PHP_TZ) and
+  ${EC_HOSTNAME} (the host name of the main web UI).
 - needs_internet=true only for services that must download content (indexers,
   torrent clients...). Images marked vulnerable must never need the Internet.
 - Expose exactly one service with a web UI through "expose" (its container port).
@@ -64,11 +68,18 @@ class TranslatorError(RuntimeError):
     """Translation failed. The message is safe to show to users."""
 
 
+class KeyRejectedError(TranslatorError):
+    """The API refused the key (or the configured model): retrying will not help."""
+
+
 class Translator(Protocol):
     @property
     def model(self) -> str: ...
 
     async def translate(self, prompt: str) -> StackSpec: ...
+
+    async def verify(self) -> None:
+        """Check the key and the model without generating anything; raise TranslatorError."""
 
 
 class LLMTranslator:
@@ -144,7 +155,7 @@ class LLMTranslator:
             )
         except anthropic.AuthenticationError:
             logger.exception("LLM authentication failed")
-            raise TranslatorError("The LLM API key was rejected.") from None
+            raise KeyRejectedError("The LLM API key was rejected. Update it in Settings.") from None
         except anthropic.RateLimitError:
             raise TranslatorError("The LLM API is rate limited. Try again shortly.") from None
         except anthropic.APIConnectionError:
@@ -166,3 +177,25 @@ class LLMTranslator:
         except ValueError:
             logger.exception("LLM output did not match the schema")
             raise TranslatorError("The AI returned an invalid plan.") from None
+
+    async def verify(self) -> None:
+        """Retrieve the configured model: proves the key works, spends no tokens."""
+        client = self._client.with_options(timeout=_VERIFY_TIMEOUT_SECONDS, max_retries=1)
+        try:
+            await client.models.retrieve(self._model)
+        except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
+            raise KeyRejectedError("The Claude API rejected this key.") from None
+        except anthropic.NotFoundError:
+            raise KeyRejectedError(
+                f"This key cannot use the model {self._model} (ENVCRAFTER_LLM_MODEL)."
+            ) from None
+        except anthropic.RateLimitError:
+            return  # a rate-limited key is a valid key
+        except anthropic.APIConnectionError:
+            logger.warning("LLM API unreachable while checking a key", exc_info=True)
+            raise TranslatorError(
+                "The Claude API is unreachable. Check the network, then try again."
+            ) from None
+        except anthropic.APIStatusError:
+            logger.exception("LLM API error while checking a key")
+            raise TranslatorError("The Claude API returned an error. Try again shortly.") from None

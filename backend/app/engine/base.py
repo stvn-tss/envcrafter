@@ -55,6 +55,10 @@ class Engine(Protocol):
     async def status(self, stacks: Sequence[StackHandle]) -> dict[str, list[ServiceStatus]]:
         """Observed containers per project, for the given stacks only. Raises EngineError."""
 
+    async def recent_logs(self, stack: StackHandle, service: str, *, tail: int) -> list[LogLine]:
+        """Last `tail` lines of one service, without following (e.g. before a rollback)."""
+        ...
+
     def logs(self, stack: StackHandle, service: str, *, tail: int) -> AsyncGenerator[LogLine, None]:
         """Last `tail` lines of one service, then follow until the caller closes the generator."""
         ...

@@ -91,3 +91,26 @@ export async function createPlan(prompt) {
 export function fetchPlan(planId) {
   return getJson(`/api/plans/${encodeURIComponent(planId)}`);
 }
+
+/** Whether a Claude API key is configured, and where it comes from (never the key). */
+export function fetchSettings() {
+  return getJson("/api/settings");
+}
+
+/** Checks a Claude API key with the API, then stores it on the server. */
+export async function saveLlmKey(apiKey) {
+  const response = await fetch("/api/settings/llm-key", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+  if (!response.ok) throw new ApiError(await readError(response));
+  return response.json();
+}
+
+/** Forgets the key saved from the UI; the .env key, if any, is used again. */
+export async function removeLlmKey() {
+  const response = await fetch("/api/settings/llm-key", { method: "DELETE" });
+  if (!response.ok) throw new ApiError(await readError(response));
+  return response.json();
+}
