@@ -14,7 +14,9 @@ downloads, health checks, failures) to a web UI in real time.
 - **Natural-language requests with plan review** — describe what you need and
   Claude turns it into a stack (structured outputs only, no tool access, no
   code execution); you review the plan — components, images, network access,
-  storage, secret count — before anything is deployed.
+  storage, secret count — before anything is deployed. The Claude API key is
+  entered in **Settings** (checked with the API, stored on the server only); no
+  file to edit. Without a key, the same box finds the closest templates.
 - **Security gate** — every stack, whether it comes from a template or from
   the AI, is parsed with a hardened YAML loader and passes the same
   `validate_compose()` policy: allow-listed images only, no privileged mode,
@@ -25,8 +27,16 @@ downloads, health checks, failures) to a web UI in real time.
   percentage, container health, and a clear failure reason if something goes
   wrong, with automatic rollback.
 - **Environments dashboard** — every deployed environment, its live state
-  (running, starting, degraded, stopped...), and lifecycle actions: stop,
+  (running, starting, degraded, stopped...), every web address, the default
+  accounts and first steps of its template, and lifecycle actions: stop,
   start, restart, remove.
+- **Failures that explain themselves** — when containers fail to start, the
+  last log lines of the services that never became ready are kept in the
+  failed step (secrets redacted) before the rollback deletes them; a failed
+  job can be retried in one click.
+- **Comfort** — light and dark themes (following the system, or pinned in
+  Settings), optional browser notifications when a long deployment ends in the
+  background, and each environment gets the browser's time zone (`${EC_TZ}`).
 - **Container logs** — live log tail per service over a WebSocket, with
   generated secrets redacted before they ever reach the browser.
 - **Simulated engine for development** — the whole pipeline runs without
@@ -112,6 +122,12 @@ never sees the raw socket.
   project's workspace `.env` file; the API never returns them, and container
   logs have every generated secret value redacted before they leave the
   server.
+- **The Claude API key is write-only** — a key entered in Settings is checked
+  against the Claude API (a model lookup, no tokens spent), then stored in a
+  settings file with owner-only permissions (`ENVCRAFTER_SETTINGS_FILE`, a
+  dedicated volume in the control plane). The API only ever reports where the
+  active key comes from and its last four characters. Saving or removing it is
+  guarded like every other state-changing request (Origin check; JSON bodies only).
 - **Loopback by default** — the control plane's only published port is bound
   to `127.0.0.1`. Exposing EnvCrafter beyond localhost needs authentication
   in front of it, which this project does not provide (see Limitations).
@@ -126,8 +142,11 @@ local development, [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 
 ```bash
 cp .env.example .env
-# optionally set ENVCRAFTER_LLM_API_KEY for natural-language requests
 ```
+
+Natural-language requests need a Claude API key: add it from the UI
+(**Settings → Claude API key**), or set `ENVCRAFTER_LLM_API_KEY` in `.env`. A key
+saved from the UI takes precedence; removing it falls back to the `.env` key.
 
 **Control plane (real deployments):**
 
@@ -164,7 +183,9 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_TEMPLATES_DIR` | `<repository root>/templates` | Where the template catalog is loaded from. |
 | `ENVCRAFTER_IMAGE_ALLOWLIST` | `backend/app/policy/image_allowlist.yaml` | Path to the image allow-list file. |
 | `ENVCRAFTER_WORKSPACES_DIR` | `<repository root>/workspaces` | Where generated compose files, secrets and metadata are written. |
-| `ENVCRAFTER_LLM_API_KEY` | *(empty)* | Claude API key. Prompt mode and AI plans are disabled without it. |
+| `ENVCRAFTER_SETTINGS_FILE` | `<repository root>/data/settings.json` | Settings saved from the UI (the Claude API key), owner-only. |
+| `ENVCRAFTER_TIMEZONE` | `Etc/UTC` | `${EC_TZ}` of an environment when the browser sends no known time zone. |
+| `ENVCRAFTER_LLM_API_KEY` | *(empty)* | Claude API key, if not saved from the UI (a UI key takes precedence). Prompt mode and AI plans are disabled without any key. |
 | `ENVCRAFTER_LLM_MODEL` | `claude-opus-5-5` | Model used to turn a request into a stack. |
 | `ENVCRAFTER_LLM_EFFORT` | `high` | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. |
 | `ENVCRAFTER_LLM_TIMEOUT_SECONDS` | `180` | Timeout for a translation request. |
@@ -189,10 +210,11 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_MAX_LOG_STREAMS` | `4` | Concurrent container log streams. |
 | `ENVCRAFTER_SIMULATED_STEP_DELAY` | `0.4` | Delay between simulated engine steps (dev/tests only). |
 
-The defaults above for `ENVCRAFTER_TEMPLATES_DIR`, `ENVCRAFTER_WORKSPACES_DIR` and
-`ENVCRAFTER_FRONTEND_DIR` apply to the local dev server; the control-plane image sets its own
-values (`/app/templates`, `/data/workspaces`, `/app/frontend`) as `ENV` in `backend/Dockerfile`,
-matching where it copies those directories inside the container.
+The defaults above for `ENVCRAFTER_TEMPLATES_DIR`, `ENVCRAFTER_WORKSPACES_DIR`,
+`ENVCRAFTER_SETTINGS_FILE` and `ENVCRAFTER_FRONTEND_DIR` apply to the local dev server; the
+control-plane image sets its own values (`/app/templates`, `/data/workspaces`,
+`/data/settings/settings.json`, `/app/frontend`) as `ENV` in `backend/Dockerfile`, matching where
+it copies those directories or mounts its volumes inside the container.
 
 ## API overview
 
@@ -204,7 +226,7 @@ matching where it copies those directories inside the container.
 | GET | `/api/config` | Capabilities the UI adapts to: version, engine, LLM availability, public domain, project name pattern. |
 | GET | `/api/templates` | Template catalog (categories + templates). |
 | GET | `/api/templates/{template_id}/logo` | Template logo bytes, if any. |
-| POST | `/api/jobs` | Start a deployment: `{"mode": "template", "template_id": ...}`, `{"mode": "prompt", "prompt": ...}`, or `{"mode": "plan", "plan_id": ...}`. Returns `202` with `job_id` and `events_url`. |
+| POST | `/api/jobs` | Start a deployment: `{"mode": "template", "template_id": ...}`, `{"mode": "prompt", "prompt": ...}`, or `{"mode": "plan", "plan_id": ...}`, each with an optional `project_name` and `timezone` (IANA name, e.g. `Europe/Paris`). Returns `202` with `job_id` and `events_url`. |
 | GET | `/api/jobs` | List retained jobs (`?active=true` for queued/running only). |
 | GET | `/api/jobs/{job_id}` | One job's current summary. |
 | POST | `/api/plans` | Turn a natural-language prompt into a reviewable plan (`202` job; nothing is deployed). |
@@ -213,6 +235,9 @@ matching where it copies those directories inside the container.
 | GET | `/api/environments/{project}` | One environment's state and services. |
 | POST | `/api/environments/{project}/actions` | Lifecycle action: `{"action": "stop"\|"start"\|"restart"}`. Returns `202`. |
 | DELETE | `/api/environments/{project}` | Remove an environment (containers, networks, volumes, workspace). Returns `202`. |
+| GET | `/api/settings` | Whether a Claude API key is configured, its source (`settings` or `environment`), its last four characters and the model. Never the key. |
+| PUT | `/api/settings/llm-key` | `{"api_key": ...}`: check the key with the Claude API, then store and use it. `400` when the API refuses it, `502` when the API cannot be reached; nothing is stored then. |
+| DELETE | `/api/settings/llm-key` | Forget the key saved from the UI (the `.env` key, if any, is used again). |
 
 ### WebSockets
 
@@ -255,8 +280,9 @@ already cached; the end-to-end suite measures them on every run and warns
 2. Write `compose.yaml` as a *source* stack: no `ports`, no `networks:` block,
    no container names, no Traefik labels. Services use `networks: [internal]`
    by default, or add `egress` if they need the Internet. Use named volumes,
-   `${SECRET}` placeholders for generated secrets, and a healthcheck on every
-   web service.
+   `${SECRET}` placeholders for generated secrets, `${EC_TZ}` for time zone
+   variables (`TZ`, `PHP_TZ`...), and a healthcheck on every web service (the
+   test suite enforces it: without one, a UI is reported ready before it answers).
 3. Write `manifest.yaml`: every service under `components`, the web UIs under
    `expose` (the first one becomes `<project>.localhost`, the others
    `<service>.<project>.localhost`), the `secrets` to generate, `access_notes`
@@ -324,6 +350,8 @@ ENVCRAFTER_UI=1 uv run pytest tests/ui
   proxies, the API) and Traefik configuration.
 - `workspaces/`: runtime output — generated compose files, secrets and
   metadata for each deployed environment. Git-ignored.
+- `data/`: settings saved from the UI (the Claude API key). Git-ignored.
+- `ROADMAP.md`: what comes next, and what is already done.
 
 ## Limitations
 
@@ -337,3 +365,8 @@ ENVCRAFTER_UI=1 uv run pytest tests/ui
   expose EnvCrafter beyond `127.0.0.1` without putting an authenticating
   proxy in front of it.
 - Linux containers only.
+
+## License
+
+EnvCrafter is released under the [MIT License](LICENSE). Templates deploy
+third-party software under their own licenses.
