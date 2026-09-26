@@ -29,6 +29,18 @@ ordered, the items inside a phase are not.
   Media Stack, Audiobookshelf use it).
 - [x] **Light theme** — follows the system, or pinned in Settings (the UI was dark only).
 - [x] **MIT license**.
+- [x] **Cancel a running deployment or analysis** — a download or a startup stops at once
+  and is rolled back; an AI analysis just stops.
+- [x] **Restart one service** — from the dashboard, where each service shows its health.
+- [x] **First-run checklist** — Docker, reverse proxy, free memory and disk, AI key: on the
+  first visit, and in Settings.
+- [x] **Capacity check before deploying** — images already downloaded or the download
+  left, the memory needed next to what is available, free disk space, time to ready.
+- [x] **Template lint command and manifest JSON Schema** — the startup rules, template by
+  template, and completion in editors.
+- [x] **Continuous integration** — lint, types, tests and the template check on Linux and
+  Windows.
+- [x] **A key without credit says so** — instead of a generic API error.
 
 ## Phase 1 — Self-sufficient after deployment
 
@@ -47,17 +59,14 @@ Once an environment runs, everything needed to use it should be one click away.
   pattern}`) for apps that print a first password (qBittorrent).
 - [ ] **Template parameters** — typed inputs in the manifest (enum, string, boolean),
   rendered as a form before deploying: DVWA security level, GLPI language, admin e-mail...
-- [ ] **Cancel a running deployment** (a 1 GB download cannot be stopped today), and a
-  "keep on failure" option that skips the rollback for debugging.
-- [ ] **Restart one service** instead of the whole environment.
+- [ ] **Keep on failure** — an option that skips the rollback of a failed deployment, for
+  debugging.
 - [ ] **Readable names** — `glpi-1` or `glpi-brave-otter` rather than `glpi-3f2a`; editable
   display title and free-text notes per environment.
 - [ ] **Durable history** — jobs, plans and an audit log in SQLite (today: memory only, one
   hour for jobs, 15 minutes for plans, lost on restart).
-- [ ] **First-run checklist** — Docker reachable, reverse proxy up, free RAM and disk,
-  optional API key.
-- [ ] **Capacity check before deploying** ("750 MB needed, 1.2 GB free") and an "images
-  already downloaded" badge with a realistic time estimate.
+- [ ] **Download time estimate** — the capacity check knows what is left to download, not
+  the bandwidth: remember the throughput of past pulls to estimate the wait.
 - [ ] **Lighter removal for disposable environments** — simple confirmation with a few
   seconds to undo; typing the name stays for environments holding data.
 - [ ] **French and English UI**.
@@ -74,10 +83,9 @@ Once an environment runs, everything needed to use it should be one click away.
   a request is unsupported.
 - [ ] **AI diagnosis of a failure** from the redacted logs of the failed step.
 - [ ] **New templates and categories** — see [Template ideas](#template-ideas).
-- [ ] **Template tooling** — catalog hot reload, a `template lint` command, a JSON Schema for
-  manifests (editor completion), Renovate for image bumps, Trivy scans and cosign
-  verification in CI, a `platforms` field (arm64: Apple Silicon, Raspberry Pi) to hide what
-  cannot run on the host.
+- [ ] **Template tooling** — catalog hot reload, Renovate for image bumps, Trivy scans and
+  cosign verification in CI, a `platforms` field (arm64: Apple Silicon, Raspberry Pi) to
+  hide what cannot run on the host.
 - [ ] **Seed files and demo data** — bind mounts (`./...`) are resolved by the Docker daemon
   on the host, while the control plane keeps workspaces in a volume: templates cannot ship
   configuration files yet (Prometheus, Mosquitto 2.x need one).

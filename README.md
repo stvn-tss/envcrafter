@@ -1,5 +1,7 @@
 # EnvCrafter
 
+[![CI](https://github.com/stvn-tss/envcrafter/actions/workflows/ci.yml/badge.svg)](https://github.com/stvn-tss/envcrafter/actions/workflows/ci.yml)
+
 EnvCrafter is a self-hosted "personal PaaS": describe the environment you want
 in plain English, or pick one from the built-in catalog, and EnvCrafter
 validates the stack against a strict security policy, writes an isolated
@@ -25,11 +27,17 @@ downloads, health checks, failures) to a web UI in real time.
   Docker network; Internet access and public routing are opt-in, per service.
 - **Live progress** — deployments stream step-by-step events: image pull
   percentage, container health, and a clear failure reason if something goes
-  wrong, with automatic rollback.
+  wrong, with automatic rollback. A running deployment or AI analysis can be
+  cancelled: a download or a startup stops at once and is rolled back.
+- **Ready before you deploy** — each template says what it needs on this
+  machine: images already downloaded or the download left, the memory it needs
+  next to what is available, free disk space, and when it will be ready. A
+  setup check (Docker, reverse proxy, memory, disk, AI key) greets the first
+  visit and stays in Settings.
 - **Environments dashboard** — every deployed environment, its live state
-  (running, starting, degraded, stopped...), every web address, the default
-  accounts and first steps of its template, and lifecycle actions: stop,
-  start, restart, remove.
+  (running, starting, degraded, stopped...), each service with its health,
+  every web address, the default accounts and first steps of its template, and
+  lifecycle actions: stop, start, restart, remove, or restart one service.
 - **Failures that explain themselves** — when containers fail to start, the
   last log lines of the services that never became ready are kept in the
   failed step (secrets redacted) before the rollback deletes them; a failed
@@ -226,14 +234,17 @@ it copies those directories or mounts its volumes inside the container.
 | GET | `/api/config` | Capabilities the UI adapts to: version, engine, LLM availability, public domain, project name pattern. |
 | GET | `/api/templates` | Template catalog (categories + templates). |
 | GET | `/api/templates/{template_id}/logo` | Template logo bytes, if any. |
+| GET | `/api/templates/{template_id}/readiness` | What deploying the template needs here: images already downloaded, download left, memory needed and available, free disk space, warnings. |
+| GET | `/api/system` | First-run checklist: Docker, the reverse proxy, free memory and disk, the AI key. |
 | POST | `/api/jobs` | Start a deployment: `{"mode": "template", "template_id": ...}`, `{"mode": "prompt", "prompt": ...}`, or `{"mode": "plan", "plan_id": ...}`, each with an optional `project_name` and `timezone` (IANA name, e.g. `Europe/Paris`). Returns `202` with `job_id` and `events_url`. |
 | GET | `/api/jobs` | List retained jobs (`?active=true` for queued/running only). |
 | GET | `/api/jobs/{job_id}` | One job's current summary. |
+| POST | `/api/jobs/{job_id}/cancel` | Stop a running deployment (rolled back) or AI analysis; the job ends with `job.cancelled`. Returns `202`; `409` for other jobs or jobs already over. |
 | POST | `/api/plans` | Turn a natural-language prompt into a reviewable plan (`202` job; nothing is deployed). |
 | GET | `/api/plans/{plan_id}` | The reviewable plan: components, images, network access, storage, secret count. |
 | GET | `/api/environments` | Every environment with its live state. |
 | GET | `/api/environments/{project}` | One environment's state and services. |
-| POST | `/api/environments/{project}/actions` | Lifecycle action: `{"action": "stop"\|"start"\|"restart"}`. Returns `202`. |
+| POST | `/api/environments/{project}/actions` | Lifecycle action: `{"action": "stop"\|"start"\|"restart"}`, or `{"action": "restart", "service": ...}` to restart one service. Returns `202`. |
 | DELETE | `/api/environments/{project}` | Remove an environment (containers, networks, volumes, workspace). Returns `202`. |
 | GET | `/api/settings` | Whether a Claude API key is configured, its source (`settings` or `environment`), its last four characters and the model. Never the key. |
 | PUT | `/api/settings/llm-key` | `{"api_key": ...}`: check the key with the Claude API, then store and use it. `400` when the API refuses it, `502` when the API cannot be reached; nothing is stored then. |
@@ -255,7 +266,7 @@ not reconnect); any other close (e.g. `1006`) should be retried with backoff.
 ### Event types
 
 `job.accepted`, `step.started`, `step.log`, `step.progress`, `step.completed`,
-`step.failed`, `job.succeeded`, `job.failed`.
+`step.failed`, `job.succeeded`, `job.failed`, `job.cancelled`.
 
 ## Templates
 
@@ -289,10 +300,15 @@ already cached; the end-to-end suite measures them on every run and warns
    (default credentials, first-run steps), and a required `footprint`
    (`download_mb`, `memory_mb`, `first_start_seconds`). An optional
    `logo: logo.png` or `logo.webp` (≤ 64 KiB) can sit next to the manifest —
-   check the software's logo usage policy before publishing it.
-4. The application refuses to start if a template breaks the security policy
-   or its manifest disagrees with its compose file. Then run the end-to-end
-   test for the new template.
+   check the software's logo usage policy before publishing it. Start the file
+   with `# yaml-language-server: $schema=../../manifest.schema.json` for
+   completion and validation in editors. Secret names starting with `EC_` are
+   reserved for built-in variables.
+4. Check the catalog from `backend/`: `uv run python -m app.tools.template_lint`
+   applies the startup rules template by template. The application itself
+   refuses to start if a template breaks the security policy or its manifest
+   disagrees with its compose file. Then run the end-to-end test for the new
+   template.
 
 ## Testing
 
@@ -303,7 +319,11 @@ uv run pytest                # unit and API tests (simulated engine)
 uv run ruff check .          # lint
 uv run ruff format --check . # formatting
 uv run mypy app              # type checking (strict)
+uv run python -m app.tools.template_lint  # template catalog + manifest schema
 ```
+
+CI runs these checks on Linux and Windows for every push to `main` and every
+pull request.
 
 End-to-end, against the real control plane (slow, pulls images):
 
@@ -325,7 +345,8 @@ ENVCRAFTER_UI=1 uv run pytest tests/ui
 ## Project layout
 
 - `backend/`: Python 3.12+, FastAPI, asyncio, Pydantic v2. Entry point:
-  `app/main.py` (app factory + lifespan).
+  `app/main.py` (app factory + lifespan). `app/tools/`: the template lint
+  command.
   - `app/api/`: REST routes, WebSocket streams, dependency providers.
   - `app/core/`: settings, request guards, security headers.
   - `app/models/`: typed contracts for requests, events, templates, plans,
