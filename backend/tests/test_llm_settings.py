@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import stat
 import threading
 from pathlib import Path
@@ -89,11 +90,13 @@ def test_saved_key_enables_ai_requests_and_survives_a_restart(
     assert client.post("/api/plans", json={"prompt": "A service desk"}).status_code == 202
     assert UI_KEY not in client.get("/api/settings").text
 
-    # Stored like the .env file: owner-only, in an owner-only directory.
+    # Stored like the .env file: owner-only, in an owner-only directory. Windows has no
+    # POSIX modes; the control plane that runs EnvCrafter for real is Linux.
     stored = settings.settings_file
     assert json.loads(stored.read_text(encoding="utf-8"))["llm_api_key"] == UI_KEY
-    assert stat.S_IMODE(stored.stat().st_mode) == 0o600
-    assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
+    if os.name == "posix":
+        assert stat.S_IMODE(stored.stat().st_mode) == 0o600
+        assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
     assert [path.name for path in stored.parent.iterdir()] == [stored.name]  # no temp file left
 
     restarted = make_client(translator_factory=_Keys())

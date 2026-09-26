@@ -161,9 +161,7 @@ const environments = new EnvironmentsPanel(document.querySelector("#environments
 });
 
 function setBusy(busy) {
-  for (const button of document.querySelectorAll("[data-deploy]")) {
-    button.disabled = busy || button.hasAttribute("data-unavailable");
-  }
+  for (const button of document.querySelectorAll("[data-deploy]")) button.disabled = busy;
 }
 
 /**
