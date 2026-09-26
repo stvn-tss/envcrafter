@@ -27,6 +27,24 @@ logger = logging.getLogger(__name__)
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # Checking a key is a metadata call: fail fast instead of waiting for the planning timeout.
 _VERIFY_TIMEOUT_SECONDS = 15.0
+_NO_CREDIT = (
+    "The Anthropic account of this API key has no credit left. Add credits in the "
+    "Claude Console (Plans & Billing), then try again."
+)
+
+
+def _is_billing_error(exc: anthropic.APIStatusError) -> bool:
+    """402, or the 400 whose message says the credit balance is too low. The upstream
+    message only selects our own wording: it is never shown to users."""
+    if exc.status_code == 402:
+        return True
+    body = exc.body if isinstance(exc.body, dict) else {}
+    error = body.get("error")
+    message = error.get("message") if isinstance(error, dict) else None
+    return (
+        exc.status_code == 400 and isinstance(message, str) and "credit balance" in message.lower()
+    )
+
 
 _RULES = """\
 You are the planning component of EnvCrafter, a self-hosted platform that deploys
@@ -162,7 +180,10 @@ class LLMTranslator:
         except anthropic.APIConnectionError:
             logger.exception("LLM API unreachable")
             raise TranslatorError("The LLM API is unreachable.") from None
-        except anthropic.APIStatusError:
+        except anthropic.APIStatusError as exc:
+            if _is_billing_error(exc):
+                logger.warning("LLM API refused the request: the account has no credit left")
+                raise TranslatorError(_NO_CREDIT) from None
             logger.exception("LLM API error")
             raise TranslatorError("The LLM API returned an error.") from None
 

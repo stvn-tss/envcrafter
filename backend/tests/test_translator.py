@@ -193,3 +193,51 @@ async def test_verify_explains_every_failure(
 async def test_a_rate_limited_key_is_a_valid_key(allowlist: ImageAllowlist) -> None:
     translator, _ = _verifier(allowlist, _status_error(anthropic.RateLimitError, 429))
     await translator.verify()
+
+
+class _FailingMessages:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def create(self, **kwargs: Any) -> Any:
+        raise self.error
+
+
+def _failing_translator(allowlist: ImageAllowlist, error: Exception) -> LLMTranslator:
+    client = SimpleNamespace(beta=SimpleNamespace(messages=_FailingMessages(error)))
+    return LLMTranslator(
+        api_key=SecretStr("test"),
+        model="claude-opus-5-5",
+        effort="high",
+        timeout=10,
+        catalog=TemplateCatalog.load(Settings().templates_dir, allowlist),
+        allowlist=allowlist,
+        client=client,  # type: ignore[arg-type]
+    )
+
+
+def _api_error(cls: type[anthropic.APIStatusError], code: int, message: str) -> Exception:
+    body = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    return cls(message, response=httpx2.Response(code, request=_REQUEST), body=body)
+
+
+_NO_CREDIT_MESSAGE = (
+    "Your credit balance is too low to access the Anthropic API. "
+    "Please go to Plans & Billing to upgrade or purchase credits."
+)
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (_api_error(anthropic.BadRequestError, 400, _NO_CREDIT_MESSAGE), "no credit left"),
+        (_api_error(anthropic.APIStatusError, 402, "Payment required"), "no credit left"),
+        (_api_error(anthropic.BadRequestError, 400, "max_tokens: too large"), "returned an error"),
+        (_status_error(anthropic.AuthenticationError, 401), "rejected"),
+    ],
+)
+async def test_translate_explains_api_failures(
+    allowlist: ImageAllowlist, error: Exception, message: str
+) -> None:
+    with pytest.raises(TranslatorError, match=message):
+        await _failing_translator(allowlist, error).translate("deploy something")
