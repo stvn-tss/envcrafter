@@ -569,5 +569,6 @@ code { font: var(--text-sm) var(--mono); color: var(--text-2); overflow-wrap: an
   .access-list code { margin-bottom: 6px; }
 }
 .access-note { margin: 6px 0 0; }
-.network-note { margin: 0; font-size: var(--text-md); padding-left: 12px; border-left: 3px solid var(--success); }
-.network-note[data-internet="true"] { border-left-color: var(--warning); }
+.network-note { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: var(--text-md); }
+.network-note .icon { width: 16px; height: 16px; margin-top: 3px; color: var(--success); }
+.network-note[data-internet="true"] .icon { color: var(--warning); }

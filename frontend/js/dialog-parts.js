@@ -54,7 +54,10 @@ export function networkSummary(needsInternet) {
   const text = needsInternet
     ? "Own isolated network. Outbound Internet access is enabled for the services that need it."
     : "Own isolated network with no Internet access. Reachable only from this machine.";
-  return el("p", { className: "network-note", text, attrs: { "data-internet": String(needsInternet) } });
+  return el("p", { className: "network-note", attrs: { "data-internet": String(needsInternet) } }, [
+    icon(needsInternet ? "globe" : "check"),
+    el("span", { text }),
+  ]);
 }
 
 export function volumesList(volumes) {
