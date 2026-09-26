@@ -26,10 +26,12 @@ const JOB_LABELS = {
 };
 const CAN_STOP = new Set(["running", "starting", "degraded"]);
 const CAN_START = new Set(["stopped", "degraded", "missing"]);
+const actionControls = (row) => [row.stop, row.start, row.restart, row.remove];
 
 export class EnvironmentsPanel {
   #timer = 0;
   #loading = false;
+  #again = false; // refresh() was called while a poll was in flight
   #environments = [];
   #rows = new Map(); // project -> row parts
 
@@ -62,7 +64,11 @@ export class EnvironmentsPanel {
 
   async refresh() {
     window.clearTimeout(this.#timer);
-    if (this.#loading) return;
+    if (this.#loading) {
+      // That poll may have read the server before an action: run once more after it.
+      this.#again = true;
+      return;
+    }
     this.#loading = true;
     try {
       const body = await fetchEnvironments();
@@ -74,7 +80,12 @@ export class EnvironmentsPanel {
       this.error.hidden = false;
     } finally {
       this.#loading = false;
-      if (document.visibilityState === "visible") this.#timer = window.setTimeout(() => this.refresh(), POLL_MS);
+      if (this.#again) {
+        this.#again = false;
+        this.refresh();
+      } else if (document.visibilityState === "visible") {
+        this.#timer = window.setTimeout(() => this.refresh(), POLL_MS);
+      }
     }
   }
 
@@ -117,12 +128,12 @@ export class EnvironmentsPanel {
       link: el("a", { className: "environment-link", attrs: { target: "_blank", rel: "noopener noreferrer" } }),
       progress: button("View progress", (env) => this.handlers.onFollow(env.job, env), "button small primary"),
       logs: button("Logs", (env) => this.handlers.onLogs?.(env)),
-      stop: button("Stop", (env) => this.handlers.onAction(env.project, "stop", env)),
-      start: button("Start", (env) => this.handlers.onAction(env.project, "start", env)),
-      restart: button("Restart", (env) => this.handlers.onAction(env.project, "restart", env)),
+      stop: button("Stop", (env) => this.#act(project, "stop", env)),
+      start: button("Start", (env) => this.#act(project, "start", env)),
+      restart: button("Restart", (env) => this.#act(project, "restart", env)),
       remove: button("Remove", (env) => this.handlers.onRemove({ project: env.project, volumes: Array.isArray(env.volumes) ? env.volumes : null }), "button small danger"),
     };
-    for (const [key, label] of [["logs", "Logs of"], ["stop", "Stop"], ["start", "Start"], ["restart", "Restart"], ["remove", "Remove"]]) {
+    for (const [key, label] of [["progress", "View progress of"], ["logs", "Logs of"], ["stop", "Stop"], ["start", "Start"], ["restart", "Restart"], ["remove", "Remove"]]) {
       parts[key].setAttribute("aria-label", `${label} ${project}`);
     }
     parts.logs.hidden = !this.handlers.onLogs;
@@ -139,6 +150,14 @@ export class EnvironmentsPanel {
     ]);
     this.#rows.set(project, parts);
     return parts;
+  }
+
+  /** Disable the row's actions at once, so a second click cannot race the first one;
+   *  the next render re-enables the ones that fit the new state. */
+  #act(project, action, environment) {
+    const row = this.#rows.get(project);
+    if (row) for (const control of actionControls(row)) control.disabled = true;
+    this.handlers.onAction(environment.project, action, environment);
   }
 
   #current(project) {
@@ -175,6 +194,6 @@ export class EnvironmentsPanel {
     row.stop.hidden = !CAN_STOP.has(environment.state);
     row.start.hidden = !CAN_START.has(environment.state);
     row.restart.hidden = !CAN_STOP.has(environment.state);
-    for (const control of [row.stop, row.start, row.restart, row.remove]) control.disabled = Boolean(busy) || environment.state === "pending";
+    for (const control of actionControls(row)) control.disabled = Boolean(busy) || environment.state === "pending";
   }
 }
