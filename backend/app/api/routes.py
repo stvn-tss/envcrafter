@@ -38,6 +38,7 @@ from app.services.orchestrator import (
     UnknownEnvironmentError,
     UnknownJobError,
     UnknownPlanError,
+    UnknownServiceError,
     UnknownTemplateError,
     job_events_url,
 )
@@ -62,6 +63,7 @@ def _summary(job: Job) -> JobSummary:
         # but that is internal pipeline state (_load_plan), never client-facing.
         plan_id=job.plan_id if job.mode == "planning" else None,
         cancel_requested=job.cancel_requested,
+        service=job.service,
         events_url=job_events_url(job.id),
     )
 
@@ -221,11 +223,14 @@ async def run_environment_action(
     payload: LifecycleRequest,
     orchestrator: OrchestratorDep,
 ) -> JobSummary:
-    """Stop, start or restart an environment; progress is streamed on `events_url`."""
+    """Stop, start or restart an environment, or restart one of its services (`service`);
+    progress is streamed on `events_url`."""
     try:
-        job = await orchestrator.submit_lifecycle(project, payload.action)
+        job = await orchestrator.submit_lifecycle(project, payload.action, payload.service)
     except UnknownEnvironmentError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment") from None
+    except UnknownServiceError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown service") from None
     except ProjectNameConflictError:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "A job is already running for this environment"

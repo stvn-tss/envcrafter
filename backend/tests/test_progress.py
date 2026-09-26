@@ -142,7 +142,7 @@ class _SlowHealthEngine(SimulatedEngine):
         super().__init__(delay=0)
         self.polls = 0
 
-    async def start(self, stack: StackHandle, log: LogSink) -> None:
+    async def start(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
         await asyncio.sleep(0.3)
 
     async def status(self, stacks: Sequence[StackHandle]) -> dict[str, list[ServiceStatus]]:
@@ -186,7 +186,7 @@ class _FailingStatusEngine(SimulatedEngine):
         super().__init__(delay=0)
         self.status_calls = 0
 
-    async def start(self, stack: StackHandle, log: LogSink) -> None:
+    async def start(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
         await asyncio.sleep(0.2)
 
     async def status(self, stacks: Sequence[StackHandle]) -> dict[str, list[ServiceStatus]]:

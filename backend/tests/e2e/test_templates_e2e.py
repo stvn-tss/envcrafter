@@ -232,6 +232,14 @@ def test_stop_and_start_keep_the_environment_routable() -> None:
             assert _follow(start["events_url"])[-1]["type"] == "job.succeeded"
             assert _environment(api, project)["state"] in {"running", "starting"}
             assert _wait_for_ui(f"{project}.localhost") < 400
+            one = _post(
+                api,
+                f"/api/environments/{project}/actions",
+                {"action": "restart", "service": "juice-shop"},
+            )
+            done = _follow(one["events_url"])[-1]
+            assert done["type"] == "job.succeeded", done["message"]
+            assert _wait_for_ui(f"{project}.localhost") < 400
         finally:
             _remove(api, project)
 

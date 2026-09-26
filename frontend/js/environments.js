@@ -27,6 +27,20 @@ const JOB_LABELS = {
   removal: "Removing", stop: "Stopping", start: "Starting", restart: "Restarting",
 };
 const CAN_STOP = new Set(["running", "starting", "degraded"]);
+const SERVICE = /^[a-z][a-z0-9-]{0,39}$/;
+const HEALTH = {
+  healthy: { label: "Healthy", tone: "succeeded" },
+  unhealthy: { label: "Unhealthy", tone: "failed" },
+  starting: { label: "Starting", tone: "running" },
+};
+
+/** Label and tone of one service's container, from Docker's state and health. */
+function serviceState(service) {
+  if (service.state === "running") return HEALTH[service.health] ?? { label: "Running", tone: "succeeded" };
+  if (typeof service.state !== "string" || !service.state) return { label: "No container", tone: "idle" };
+  const label = service.state.charAt(0).toUpperCase() + service.state.slice(1, 20);
+  return { label, tone: service.state === "exited" ? "idle" : "warning" };
+}
 const CAN_START = new Set(["stopped", "degraded", "missing"]);
 const actionControls = (row) => [row.stop, row.start, row.restart, row.remove];
 
@@ -42,6 +56,7 @@ export class EnvironmentsPanel {
    *           onLogs: ((environment: object) => void) | null,
    *           onRemove: (target: { project: string, volumes: string[] | null }) => void,
    *           onFollow: (job: object, environment: object) => void,
+   *           onRestartService: (environment: object, service: string) => void,
    *           onUpdate: (environments: object[]) => void,
    *           notesFor: (environment: object) => string[] }} handlers
    */
@@ -143,6 +158,10 @@ export class EnvironmentsPanel {
       parts[key].setAttribute("aria-label", `${label} ${project}`);
     }
     parts.logs.hidden = !this.handlers.onLogs;
+    parts.servicesSummary = el("summary", { text: "Services" });
+    parts.servicesList = el("ul", { className: "service-states" });
+    parts.serviceRows = new Map(); // service -> { item, name, state, restart }
+    parts.services = el("details", { className: "environment-services" }, [parts.servicesSummary, parts.servicesList]);
     parts.notes = el("details", { className: "environment-notes" }, [
       el("summary", { text: "Sign-in and notes" }),
       parts.notesList,
@@ -154,6 +173,7 @@ export class EnvironmentsPanel {
       ]),
       parts.meta,
       parts.links,
+      parts.services,
       parts.notes,
       el("div", { className: "environment-actions" }, [
         parts.progress, parts.logs, parts.stop, parts.start, parts.restart, parts.remove,
@@ -193,6 +213,7 @@ export class EnvironmentsPanel {
     ].filter(Boolean).join(" · ");
 
     this.#renderLinks(row, environment);
+    this.#renderServices(row, environment, busy);
     this.#renderNotes(row, environment);
 
     row.progress.hidden = !busy;
@@ -217,6 +238,57 @@ export class EnvironmentsPanel {
       el("a", { text: item.url, attrs: { href: item.url, target: "_blank", rel: "noopener noreferrer" } }),
       copyButton(item.url, `Copy the address of ${item.name}`),
     ])));
+  }
+
+  /** Each service with its live state and a restart of that service alone. Updated in
+   *  place, like the rows: a poll never destroys the button a keyboard user is on. */
+  #renderServices(row, environment, busy) {
+    const services = (Array.isArray(environment.services) ? environment.services : [])
+      .filter((service) => SERVICE.test(service?.service ?? ""));
+    row.services.hidden = services.length === 0;
+    row.servicesSummary.textContent = `Services (${services.length})`;
+    const canRestart = !busy && CAN_STOP.has(environment.state);
+    const seen = new Set();
+    for (const service of services) {
+      seen.add(service.service);
+      let parts = row.serviceRows.get(service.service);
+      if (!parts) {
+        parts = this.#createServiceRow(environment.project, service.service);
+        row.serviceRows.set(service.service, parts);
+      }
+      const name = typeof service.name === "string" && service.name ? service.name : service.service;
+      const state = serviceState(service);
+      parts.name.textContent = name;
+      parts.state.textContent = state.label;
+      parts.state.dataset.tone = state.tone;
+      parts.restart.setAttribute("aria-label", `Restart ${name} in ${environment.project}`);
+      parts.restart.disabled = !canRestart;
+    }
+    for (const [key, parts] of row.serviceRows) {
+      if (seen.has(key)) continue;
+      parts.item.remove();
+      row.serviceRows.delete(key);
+    }
+    const ordered = services.map((service) => row.serviceRows.get(service.service).item);
+    const current = [...row.servicesList.children];
+    if (current.length !== ordered.length || current.some((node, index) => node !== ordered[index])) {
+      row.servicesList.replaceChildren(...ordered);
+    }
+  }
+
+  #createServiceRow(project, service) {
+    const restart = el("button", { className: "text-button", text: "Restart", attrs: { type: "button" } });
+    restart.addEventListener("click", () => {
+      restart.disabled = true; // the next render re-enables it if the restart was refused
+      this.handlers.onRestartService?.(this.#current(project), service);
+    });
+    const parts = {
+      name: el("span", { className: "service-name" }),
+      state: el("span", { className: "service-state" }),
+      restart,
+    };
+    parts.item = el("li", {}, [parts.name, el("code", { text: service }), parts.state, restart]);
+    return parts;
   }
 
   /** Default accounts and first steps from the template: still there hours later. */

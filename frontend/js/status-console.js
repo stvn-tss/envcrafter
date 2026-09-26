@@ -57,7 +57,12 @@ const MODES = {
   removal: { active: "removing", done: "removed", title: (job) => `Removal of ${job.project_name}`, started: (job) => `Removal of ${job.project_name} started.` },
   stop: { active: "stopping", done: "stopped", title: (job) => `Stop of ${job.project_name}`, started: (job) => `Stop of ${job.project_name} started.` },
   start: { active: "starting", done: "running", title: (job) => `Start of ${job.project_name}`, started: (job) => `Start of ${job.project_name} started.` },
-  restart: { active: "restarting", done: "running", title: (job) => `Restart of ${job.project_name}`, started: (job) => `Restart of ${job.project_name} started.` },
+  restart: {
+    active: "restarting",
+    done: "running",
+    title: (job) => (job.service ? `Restart of ${job.service} in ${job.project_name}` : `Restart of ${job.project_name}`),
+    started: (job) => `Restart of ${job.service ? `${job.service} in ` : ""}${job.project_name} started.`,
+  },
   planning: { active: "planning", done: "planned", title: () => "AI analysis", started: () => "Analysis of the request started." },
 };
 const modeOf = (job) => MODES[job?.mode] ?? deployment;

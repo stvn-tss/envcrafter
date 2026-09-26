@@ -290,3 +290,24 @@ async def test_recent_logs_reads_a_bounded_tail_without_following(
     [args] = argv
     assert args[-3:] == ["--tail", "30", "app"]
     assert "--follow" not in args
+
+
+@pytest.mark.anyio
+async def test_one_service_is_stopped_and_started_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine()
+    runs: list[list[str]] = []
+
+    async def run(args: list[str], log: LogSink, *, timeout: float) -> None:  # noqa: ASYNC109
+        runs.append(args)
+
+    monkeypatch.setattr(engine, "_run", run)
+    await engine.stop(_stack(tmp_path), lambda _line: None, service="sonarr")
+    await engine.start(_stack(tmp_path), lambda _line: None, service="sonarr")
+
+    stop, start = runs
+    assert stop[-4:] == ["stop", "--timeout", "10", "sonarr"]
+    assert start[-7:] == ["up", "--detach", "--wait", "--wait-timeout", "30", "--no-deps", "sonarr"]
+    with pytest.raises(EngineError):
+        await engine.stop(_stack(tmp_path), lambda _line: None, service="../evil")

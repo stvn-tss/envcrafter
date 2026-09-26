@@ -220,3 +220,21 @@ def test_a_running_deployment_can_be_cancelled(page: Page, live_server_slow: Liv
     expect(page.locator("#job-result").get_by_role("button", name="Start again")).to_be_visible()
     expect(cancel).to_be_hidden()
     assert errors == []
+
+
+def test_dashboard_lists_services_and_restarts_one(page: Page, live_server: LiveServer) -> None:
+    errors = open_home(page, live_server)
+    deploy_template(page, "Media Stack", "media")
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+
+    title = page.locator(".environment-title code", has_text="media")
+    row = page.locator(".environment", has=title)
+    row.get_by_text("Services (5)").click()
+    restart = row.get_by_role("button", name="Restart Sonarr 4 in media")
+    expect(restart).to_be_enabled(timeout=15_000)
+    expect(row.locator(".service-states")).to_contain_text("Running")
+    restart.click()
+
+    expect(page.locator("#job-title")).to_have_text("Restart of sonarr in media")
+    expect(page.locator("#status-badge")).to_have_text("Running", timeout=15_000)
+    assert errors == []

@@ -92,7 +92,9 @@ def test_failed_start_never_deletes_the_environment(
 ) -> None:
     run_job(client, SHOP)
 
-    async def broken_start(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+    async def broken_start(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, *, service: str | None = None
+    ) -> None:
         raise EngineError("`docker compose up` failed (exit code 1)")
 
     monkeypatch.setattr(SimulatedEngine, "start", broken_start)
@@ -125,7 +127,9 @@ def test_rollback_keeps_the_environment_reserved(
     rolling_back = threading.Event()
     release = threading.Event()
 
-    async def broken_start(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+    async def broken_start(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, *, service: str | None = None
+    ) -> None:
         raise EngineError("`docker compose up` failed (exit code 1)")
 
     async def slow_remove(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
@@ -154,3 +158,64 @@ def test_rollback_keeps_the_environment_reserved(
     assert events[-1]["type"] == "job.failed"
     assert not (settings.workspaces_dir / "shop").exists()
     assert client.get("/api/environments").json() == {"environments": []}
+
+
+MEDIA = {"mode": "template", "template_id": "media-stack", "project_name": "media"}
+
+
+def test_restart_one_service_leaves_the_others_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_job(client, MEDIA)
+    calls: list[tuple[str, str | None]] = []
+    original_stop, original_start = SimulatedEngine.stop, SimulatedEngine.start
+
+    async def stop(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, *, service: str | None = None
+    ) -> None:
+        calls.append(("stop", service))
+        await original_stop(self, stack, log, service=service)
+
+    async def start(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, *, service: str | None = None
+    ) -> None:
+        calls.append(("start", service))
+        await original_start(self, stack, log, service=service)
+
+    monkeypatch.setattr(SimulatedEngine, "stop", stop)
+    monkeypatch.setattr(SimulatedEngine, "start", start)
+    response = client.post(
+        "/api/environments/media/actions", json={"action": "restart", "service": "sonarr"}
+    )
+    assert response.status_code == 202, response.text
+    assert response.json()["service"] == "sonarr"
+    with client.websocket_connect(response.json()["events_url"]) as ws:
+        events = collect_events(ws)
+
+    assert [step["label"] for step in events[0]["plan"]] == [
+        "Container shutdown (sonarr)",
+        "Container startup (sonarr)",
+    ]
+    assert events[0]["message"] == "Restart of 'sonarr' in 'media' accepted"
+    assert events[-1]["type"] == "job.succeeded"
+    assert events[-1]["message"] == "Service 'sonarr' of 'media' is running"
+    assert calls == [("stop", "sonarr"), ("start", "sonarr")]
+    assert state(client, "media") == "running"
+
+
+def test_restart_one_service_validation(client: TestClient) -> None:
+    run_job(client, SHOP)
+    url = "/api/environments/shop/actions"
+    unknown = client.post(url, json={"action": "restart", "service": "sonarr"})
+    stop_one = client.post(url, json={"action": "stop", "service": "juice-shop"})
+    malformed = client.post(url, json={"action": "restart", "service": "Juice Shop"})
+    ghost = client.post(
+        "/api/environments/ghost/actions", json={"action": "restart", "service": "app"}
+    )
+
+    assert (unknown.status_code, unknown.json()["detail"]) == (404, "Unknown service")
+    assert stop_one.status_code == 422
+    assert malformed.status_code == 422
+    assert (ghost.status_code, ghost.json()["detail"]) == (404, "Unknown environment")
+    # The refused requests left no job behind: a whole restart is accepted at once.
+    assert client.post(url, json={"action": "restart"}).status_code == 202

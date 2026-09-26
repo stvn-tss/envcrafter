@@ -109,6 +109,10 @@ class UnknownEnvironmentError(LookupError):
     pass
 
 
+class UnknownServiceError(LookupError):
+    pass
+
+
 class ProjectNameConflictError(ValueError):
     pass
 
@@ -143,6 +147,7 @@ class Job:
     # The translator of the key in use when the job was accepted: changing the key in
     # Settings never swaps it under a running analysis.
     translator: Translator | None = None
+    service: str | None = None  # the one service a restart targets
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     url: str | None = None
@@ -389,15 +394,22 @@ class Orchestrator:
             ],
         )
 
-    async def submit_lifecycle(self, project: str, action: LifecycleAction) -> Job:
-        job = Job(id=uuid4(), mode=action, project_name=project)
+    async def submit_lifecycle(
+        self, project: str, action: LifecycleAction, service: str | None = None
+    ) -> Job:
+        """Stop, start or restart an environment; `service` restarts that service alone."""
+        job = Job(id=uuid4(), mode=action, project_name=project, service=service)
         await self._reserve(job, must_exist=True)
+        if service is not None and service not in await self._service_names(project):
+            del self._jobs[job.id]
+            raise UnknownServiceError(service)
+        target = f" ({service})" if service else ""
         stop_step = (
-            PlanStep(key="container_stop", label="Container shutdown"),
+            PlanStep(key="container_stop", label=f"Container shutdown{target}"),
             self._stop_existing,
         )
         start_step = (
-            PlanStep(key="container_start", label="Container startup"),
+            PlanStep(key="container_start", label=f"Container startup{target}"),
             self._start_existing,
         )
         plans: dict[LifecycleAction, Plan] = {
@@ -870,12 +882,17 @@ class Orchestrator:
             ctx.job.url = ctx.job.urls[0].url
 
     async def _start_watched(
-        self, ctx: StepContext, stack: StackHandle, expected: Sequence[str]
+        self,
+        ctx: StepContext,
+        stack: StackHandle,
+        expected: Sequence[str],
+        *,
+        service: str | None = None,
     ) -> None:
         """Start the stack; meanwhile report every few seconds how many services are ready."""
         watcher = asyncio.create_task(self._watch_health(ctx, stack, expected))
         try:
-            await self._engine.start(stack, ctx.log)
+            await self._engine.start(stack, ctx.log, service=service)
         finally:
             watcher.cancel()
             await asyncio.gather(watcher, return_exceptions=True)
@@ -892,6 +909,15 @@ class Orchestrator:
                 logger.debug("Health watcher could not read %s", stack.project, exc_info=True)
                 continue
             ctx.progress(*health_summary(expected, observed))
+
+    async def _service_names(self, project: str) -> list[str]:
+        """Services of an existing environment's compose file; [] when it cannot be read."""
+        try:
+            _, services = await self._existing_stack(project)
+        except (StepFailedError, OSError, ValueError, yaml.YAMLError, WorkspaceError):
+            logger.warning("Cannot list the services of %s", project, exc_info=True)
+            return []
+        return services
 
     async def _existing_stack(
         self, project: str, *, tolerate_unreadable: bool = False
@@ -934,12 +960,14 @@ class Orchestrator:
 
     async def _stop_existing(self, ctx: StepContext) -> None:
         stack, _ = await self._existing_stack(self._project(ctx.job))
-        await self._engine.stop(stack, ctx.log)
+        await self._engine.stop(stack, ctx.log, service=ctx.job.service)
 
     async def _start_existing(self, ctx: StepContext) -> None:
         project = self._project(ctx.job)
         stack, services = await self._existing_stack(project)
-        await self._start_watched(ctx, stack, services)
+        service = ctx.job.service
+        expected = [service] if service is not None else services
+        await self._start_watched(ctx, stack, expected, service=service)
         meta = await asyncio.to_thread(self._workspaces.read_meta, project)
         if meta is not None and meta.urls:
             ctx.job.urls = list(meta.urls)
@@ -981,6 +1009,8 @@ def _accepted_message(job: Job) -> str:
     project = job.project_name
     if job.mode in DEPLOY_MODES:
         return f"Deployment of '{project}' accepted ({job.mode})"
+    if job.service is not None:
+        return f"Restart of '{job.service}' in '{project}' accepted"
     verbs = {"removal": "Removal", "stop": "Stop", "start": "Start", "restart": "Restart"}
     return f"{verbs[job.mode]} of '{project}' accepted"
 
@@ -1007,4 +1037,6 @@ def _success_message(job: Job) -> str:
         return f"Environment '{project}' is removed"
     if job.mode == "stop":
         return f"Environment '{project}' is stopped"
+    if job.service is not None:
+        return f"Service '{job.service}' of '{project}' is running"
     return f"Environment '{project}' is running{at}"

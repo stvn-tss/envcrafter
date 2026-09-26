@@ -14,7 +14,9 @@ from tests.conftest import run_job
 GLPI = {"mode": "template", "template_id": "glpi", "project_name": "desk"}
 
 
-async def _broken_start(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+async def _broken_start(
+    self: SimulatedEngine, stack: StackHandle, log: LogSink, *, service: str | None = None
+) -> None:
     raise EngineError("`docker compose up` failed (exit code 1)")
 
 

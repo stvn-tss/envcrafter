@@ -31,16 +31,18 @@ class SimulatedEngine:
             log(f"Reverse proxy attached to {stack.edge_network}")
         await asyncio.sleep(self._delay)
 
-    async def start(self, stack: StackHandle, log: LogSink) -> None:
-        self._stopped.discard(stack.compose_project)
-        for service in await self._images(stack):
-            log(f"[simulated] container {stack.compose_project}-{service}-1 started")
+    async def start(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
+        if service is None:
+            self._stopped.discard(stack.compose_project)
+        for name in [service] if service is not None else await self._images(stack):
+            log(f"[simulated] container {stack.compose_project}-{name}-1 started")
             await asyncio.sleep(self._delay)
 
-    async def stop(self, stack: StackHandle, log: LogSink) -> None:
-        self._stopped.add(stack.compose_project)
-        for service in await self._images(stack):
-            log(f"[simulated] container {stack.compose_project}-{service}-1 stopped")
+    async def stop(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
+        if service is None:
+            self._stopped.add(stack.compose_project)
+        for name in [service] if service is not None else await self._images(stack):
+            log(f"[simulated] container {stack.compose_project}-{name}-1 stopped")
             await asyncio.sleep(self._delay)
 
     async def remove(self, stack: StackHandle, log: LogSink) -> None:

@@ -101,7 +101,25 @@ class DockerComposeEngine:
             )
             log(f"Reverse proxy attached to {stack.edge_network}")
 
-    async def start(self, stack: StackHandle, log: LogSink) -> None:
+    async def start(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
+        if service is not None:
+            # One service of an existing environment: its networks and the reverse proxy
+            # attachment are already in place.
+            await self._run(
+                self._compose(
+                    stack,
+                    "up",
+                    "--detach",
+                    "--wait",
+                    "--wait-timeout",
+                    str(self._start_timeout),
+                    "--no-deps",
+                    _checked_service(service),
+                ),
+                log,
+                timeout=self._start_timeout + 60,
+            )
+            return
         # The edge network may not exist yet: `docker network inspect` then fails, but
         # that must not fail the job, since `compose up` below (re)creates the network
         # (for instance after it was removed by an external `docker compose down`). Only
@@ -124,9 +142,10 @@ class DockerComposeEngine:
         if stack.edge_network and not attached:
             await self._ensure_routing(stack.edge_network, log)
 
-    async def stop(self, stack: StackHandle, log: LogSink) -> None:
+    async def stop(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
+        only = [_checked_service(service)] if service is not None else []
         await self._run(
-            self._compose(stack, "stop", "--timeout", str(self._stop_timeout)),
+            self._compose(stack, "stop", "--timeout", str(self._stop_timeout), *only),
             log,
             timeout=self._stop_timeout + 120,
         )
@@ -335,6 +354,13 @@ class DockerComposeEngine:
                 await process.wait()
         if code != 0:
             raise EngineError(f"`{_describe(args)}` failed (exit code {code})")
+
+
+def _checked_service(service: str) -> str:
+    """Defense in depth: callers pass validated names, argv never gets anything else."""
+    if not _SERVICE_RE.fullmatch(service):
+        raise EngineError("Invalid service name.")
+    return service
 
 
 def parse_ps_output(output: str) -> dict[str, list[ServiceStatus]]:

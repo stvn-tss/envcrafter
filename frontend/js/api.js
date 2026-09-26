@@ -66,11 +66,11 @@ export async function removeEnvironment(project) {
 }
 
 /** Stop, start or restart an environment. Resolves with the job summary (HTTP 202). */
-export async function runEnvironmentAction(project, action) {
+export async function runEnvironmentAction(project, action, service = null) {
   const response = await fetch(`/api/environments/${encodeURIComponent(project)}/actions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify(service ? { action, service } : { action }),
   });
   if (!response.ok) throw new ApiError(await readError(response));
   return response.json();

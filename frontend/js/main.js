@@ -153,6 +153,16 @@ const environments = new EnvironmentsPanel(document.querySelector("#environments
     }
   },
   onLogs: (environment) => logsDialog.open(environment),
+  onRestartService: async (environment, service) => {
+    const error = await run(
+      () => runEnvironmentAction(environment.project, "restart", service),
+      { title: environment.title, templateId: environment.template_id },
+    );
+    if (error) {
+      showToast(error);
+      environments.refresh();
+    }
+  },
   onRemove: (target) => removeDialog.open(target),
   onFollow: (job, environment) => follow({ job: { ...job, project_name: environment.project }, context: { title: environment.title, templateId: environment.template_id } }),
   notesFor: (environment) => {

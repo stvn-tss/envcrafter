@@ -9,11 +9,19 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, Field, RootModel, StringConstraints
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    Field,
+    RootModel,
+    StringConstraints,
+    model_validator,
+)
 
 from app.core.timezones import TIMEZONE_PATTERN
 from app.models.common import JobMode, ProjectName, StrictModel, TemplateId
 from app.models.environment import WebEndpoint
+from app.models.template import ServiceName
 
 # --- Requests -----------------------------------------------------------------
 
@@ -106,9 +114,17 @@ LifecycleAction = Literal["stop", "start", "restart"]
 
 
 class LifecycleRequest(StrictModel):
-    """Body of POST /api/environments/{project}/actions."""
+    """Body of POST /api/environments/{project}/actions. With `service`, a restart only
+    stops and starts that service; the others keep running."""
 
     action: LifecycleAction
+    service: ServiceName | None = None
+
+    @model_validator(mode="after")
+    def _service_only_restarts(self) -> "LifecycleRequest":
+        if self.service is not None and self.action != "restart":
+            raise ValueError("only a restart can target one service")
+        return self
 
 
 # --- Jobs & events ------------------------------------------------------------
@@ -179,6 +195,7 @@ class JobSummary(BaseModel):
     urls: list[WebEndpoint] = Field(default_factory=list)
     plan_id: UUID | None = None  # set by a succeeded "planning" job
     cancel_requested: bool = False  # a cancellation is under way
+    service: str | None = None  # the one service a restart targets
     events_url: str
 
 

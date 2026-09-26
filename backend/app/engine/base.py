@@ -43,11 +43,13 @@ class Engine(Protocol):
     async def create(self, stack: StackHandle, log: LogSink) -> None:
         """Create networks, volumes and containers without starting them."""
 
-    async def start(self, stack: StackHandle, log: LogSink) -> None:
-        """Ensure the reverse proxy is attached, start containers and wait until healthy."""
+    async def start(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
+        """Ensure the reverse proxy is attached, start containers and wait until healthy.
+        With `service`, start that service alone (the others keep their state)."""
 
-    async def stop(self, stack: StackHandle, log: LogSink) -> None:
-        """Stop the containers, keeping them, their networks and volumes."""
+    async def stop(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
+        """Stop the containers, keeping them, their networks and volumes; with `service`,
+        that service alone."""
 
     async def remove(self, stack: StackHandle, log: LogSink) -> None:
         """Remove containers, networks and volumes of the project."""
