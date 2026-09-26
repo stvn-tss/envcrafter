@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../manifest.schema.json
 # Intentionally vulnerable: never attached to an egress network, localhost routing only.
 id: owasp-juice-shop
 name: OWASP Juice Shop

@@ -104,7 +104,7 @@ class TemplateCatalog:
         """Blocking disk I/O: call through `asyncio.to_thread()` from async code."""
         templates: dict[str, Template] = {}
         for manifest_path in sorted(root.glob("*/*/manifest.yaml")):
-            template = _load_template(manifest_path, allowlist)
+            template = load_template(manifest_path, allowlist)
             if template.manifest.id in templates:
                 raise TemplateCatalogError(f"duplicate template id '{template.manifest.id}'")
             templates[template.manifest.id] = template
@@ -117,7 +117,8 @@ class TemplateCatalog:
         return list(self._templates.values())
 
 
-def _load_template(manifest_path: Path, allowlist: ImageAllowlist) -> Template:
+def load_template(manifest_path: Path, allowlist: ImageAllowlist) -> Template:
+    """Load and check one template directory (blocking I/O). Raises TemplateCatalogError."""
     template_dir = manifest_path.parent
     try:
         manifest = TemplateManifest.model_validate(

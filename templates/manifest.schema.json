@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ExposedPort": {
+      "additionalProperties": false,
+      "properties": {
+        "service": {
+          "pattern": "^[a-z][a-z0-9-]{0,39}$",
+          "title": "Service",
+          "type": "string"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Port",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "service",
+        "port"
+      ],
+      "title": "ExposedPort",
+      "type": "object"
+    },
+    "TemplateCategory": {
+      "enum": [
+        "itsm",
+        "media",
+        "security-lab"
+      ],
+      "title": "TemplateCategory",
+      "type": "string"
+    },
+    "TemplateComponent": {
+      "additionalProperties": false,
+      "description": "One installed tool, shown in the template details.",
+      "properties": {
+        "service": {
+          "pattern": "^[a-z][a-z0-9-]{0,39}$",
+          "title": "Service",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "role": {
+          "maxLength": 200,
+          "minLength": 1,
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "name",
+        "role"
+      ],
+      "title": "TemplateComponent",
+      "type": "object"
+    },
+    "TemplateFootprint": {
+      "additionalProperties": false,
+      "description": "Approximate weight of a template on linux/amd64 (see README, \"Adding a template\").",
+      "properties": {
+        "download_mb": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Download Mb",
+          "type": "integer"
+        },
+        "memory_mb": {
+          "maximum": 100000,
+          "minimum": 1,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "first_start_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "First Start Seconds",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "download_mb",
+        "memory_mb",
+        "first_start_seconds"
+      ],
+      "title": "TemplateFootprint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "pattern": "^[a-z][a-z0-9-]{1,38}[a-z0-9]$",
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 60,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "category": {
+      "$ref": "#/$defs/TemplateCategory"
+    },
+    "summary": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 800,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/TemplateComponent"
+      },
+      "minItems": 1,
+      "title": "Components",
+      "type": "array"
+    },
+    "expose": {
+      "items": {
+        "$ref": "#/$defs/ExposedPort"
+      },
+      "maxItems": 6,
+      "minItems": 1,
+      "title": "Expose",
+      "type": "array"
+    },
+    "secrets": {
+      "items": {
+        "pattern": "^(?!EC_)[A-Z][A-Z0-9_]{2,63}$",
+        "type": "string"
+      },
+      "title": "Secrets",
+      "type": "array"
+    },
+    "needs_internet": {
+      "default": false,
+      "title": "Needs Internet",
+      "type": "boolean"
+    },
+    "access_notes": {
+      "items": {
+        "maxLength": 300,
+        "type": "string"
+      },
+      "title": "Access Notes",
+      "type": "array"
+    },
+    "tags": {
+      "items": {
+        "maxLength": 60,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "footprint": {
+      "$ref": "#/$defs/TemplateFootprint"
+    },
+    "logo": {
+      "anyOf": [
+        {
+          "pattern": "^logo\\.(png|webp)$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Logo"
+    }
+  },
+  "required": [
+    "id",
+    "name",
+    "category",
+    "summary",
+    "description",
+    "components",
+    "expose",
+    "footprint"
+  ],
+  "title": "TemplateManifest",
+  "type": "object"
+}

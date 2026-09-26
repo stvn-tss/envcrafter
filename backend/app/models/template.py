@@ -9,7 +9,7 @@ import re
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints, WithJsonSchema
 
 from app.models.common import StrictModel, TemplateId
 
@@ -49,7 +49,11 @@ def _not_reserved(name: str) -> str:
 
 
 SecretName = Annotated[
-    str, StringConstraints(pattern=SECRET_NAME_PATTERN), AfterValidator(_not_reserved)
+    str,
+    StringConstraints(pattern=SECRET_NAME_PATTERN),
+    AfterValidator(_not_reserved),
+    # Editors validate manifests with this schema: it states the reserved prefix too.
+    WithJsonSchema({"type": "string", "pattern": r"^(?!EC_)[A-Z][A-Z0-9_]{2,63}$"}),
 ]
 
 

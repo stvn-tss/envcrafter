@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../manifest.schema.json
 id: zabbix
 name: Zabbix
 category: itsm

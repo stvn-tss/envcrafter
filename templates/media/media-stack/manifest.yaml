@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../manifest.schema.json
 id: media-stack
 name: Media Stack
 category: media
