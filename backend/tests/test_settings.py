@@ -9,7 +9,7 @@ from app.core.config import Settings
 @pytest.mark.parametrize(
     ("name", "value"),
     [
-        ("stop_timeout_seconds", 0),
+        ("stop_timeout_seconds", -1),
         ("plan_ttl_seconds", 0),
         ("plan_ttl_seconds", -1),
         ("max_plans", 0),
@@ -44,6 +44,6 @@ def test_boundary_settings_are_accepted() -> None:
         health_poll_seconds=0.05,
         progress_interval_seconds=0.01,
         plan_ttl_seconds=1,
-        stop_timeout_seconds=1,
+        stop_timeout_seconds=0,  # docker compose stop --timeout 0: immediate kill
     )
     assert (settings.inventory_cache_seconds, settings.log_tail_max) == (0, 0)

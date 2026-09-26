@@ -97,7 +97,10 @@ async function openPlan(planId) {
 const environments = new EnvironmentsPanel(document.querySelector("#environments"), {
   onAction: async (project, action, environment) => {
     const error = await run(() => runEnvironmentAction(project, action), { title: environment.title, templateId: environment.template_id });
-    if (error) showToast(error);
+    if (error) {
+      showToast(error);
+      environments.refresh(); // re-enables the row's buttons without waiting for the next poll
+    }
   },
   onLogs: (environment) => logsDialog.open(environment),
   onRemove: (target) => removeDialog.open(target),

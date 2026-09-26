@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     public_domain: str = "localhost"
     pull_timeout_seconds: float = 1800.0
     start_timeout_seconds: int = 600
-    stop_timeout_seconds: int = Field(default=20, gt=0)
+    stop_timeout_seconds: int = Field(default=20, ge=0)
 
     # Only used for natural-language requests. Without a key, prompt mode is off.
     llm_api_key: SecretStr | None = None
