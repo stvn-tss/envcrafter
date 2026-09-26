@@ -43,7 +43,7 @@ import yaml
 from app.core.config import Settings
 from app.core.timezones import is_known_timezone
 from app.engine.base import Engine, EngineError, ServiceStatus, StackHandle
-from app.models.common import DEPLOY_MODES, JobMode
+from app.models.common import CANCELLABLE_MODES, DEPLOY_MODES, JobMode
 from app.models.deployment import (
     EventType,
     JobStatus,
@@ -80,6 +80,12 @@ logger = logging.getLogger(__name__)
 AnyDeploymentRequest = TemplateDeploymentRequest | PromptDeploymentRequest | PlanDeploymentRequest
 
 _ACTIVE_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.RUNNING})
+# Steps a cancellation interrupts at once: waits on Docker or on the AI whose subprocess
+# or HTTP call dies cleanly. The others (in-memory checks, workspace files written from
+# a thread) finish first, and the job stops before its next step.
+_INTERRUPTIBLE_STEPS = frozenset(
+    {"ai_translation", "image_pull", "network_setup", "container_deploy"}
+)
 # Logs copied into a failed deployment before its rollback deletes the containers.
 _FAILURE_LOG_SERVICES = 3
 _FAILURE_LOG_LINES = 30
@@ -111,6 +117,18 @@ class TranslatorUnavailableError(RuntimeError):
     pass
 
 
+class UnknownJobError(LookupError):
+    pass
+
+
+class JobNotCancellableError(ValueError):
+    """The job cannot be cancelled. The message is safe to show to users."""
+
+
+class _JobCancelled(Exception):
+    """Raised between steps once a cancellation was requested."""
+
+
 class StepFailedError(Exception):
     """A step failed for a reason that is safe and useful to show to the user."""
 
@@ -136,6 +154,13 @@ class Job:
     candidate: Candidate | None = None
     blueprint: StackBlueprint | None = None
     stack: StackHandle | None = None
+    # Cancellation (Orchestrator.cancel): requested by the user; `interruptible` while a
+    # step that may be interrupted runs; `finishing` once a failure or cancellation
+    # cleanup (the rollback) started.
+    cancel_requested: bool = False
+    interruptible: bool = False
+    finishing: bool = False
+    task: asyncio.Task[None] | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -250,6 +275,25 @@ class Orchestrator:
     def set_translator(self, translator: Translator | None) -> None:
         """Use another translator (a key saved or removed in Settings) for new jobs."""
         self._translator = translator
+
+    def cancel(self, job_id: UUID) -> Job:
+        """Stop a deployment or an AI analysis. A step waiting on Docker or on the AI is
+        interrupted at once; any other step finishes first. A deployment then rolls back
+        like a failure, and the job ends with `job.cancelled`."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise UnknownJobError(job_id)
+        if job.mode not in CANCELLABLE_MODES:
+            raise JobNotCancellableError("Only deployments and AI analyses can be cancelled.")
+        if job.status not in _ACTIVE_STATUSES:
+            raise JobNotCancellableError("This job is already over.")
+        if job.cancel_requested or job.finishing:
+            raise JobNotCancellableError("This job is already stopping.")
+        job.cancel_requested = True
+        logger.info("Job %s: cancellation requested", job.id)
+        if job.interruptible and job.task is not None:
+            job.task.cancel()
+        return job
 
     async def submit(self, request: AnyDeploymentRequest) -> Job:
         """Check business rules, register the job and schedule its pipeline.
@@ -398,6 +442,7 @@ class Orchestrator:
         # right after the 202 always finds it (and gets the full history).
         self._bus.open_channel(job.id)
         task = asyncio.create_task(self._run(job, plan), name=f"job-{job.id}")
+        job.task = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return job
@@ -415,6 +460,8 @@ class Orchestrator:
         ctx: StepContext | None = None
         try:
             for index, (step, handler) in enumerate(plan, start=1):
+                if job.cancel_requested:
+                    raise _JobCancelled
                 ctx = StepContext(
                     job=job,
                     step=step,
@@ -424,12 +471,24 @@ class Orchestrator:
                     progress_interval=self._settings.progress_interval_seconds,
                 )
                 ctx.emit(EventType.STEP_STARTED, f"[{index}/{len(plan)}] {step.label}")
-                await handler(ctx)
+                job.interruptible = step.key in _INTERRUPTIBLE_STEPS
+                try:
+                    await handler(ctx)
+                finally:
+                    job.interruptible = False
                 ctx.emit(EventType.STEP_COMPLETED, f"[{index}/{len(plan)}] {step.label} done")
+            if job.cancel_requested:  # accepted while the last step could not be interrupted
+                raise _JobCancelled
         except asyncio.CancelledError:
-            job.status = JobStatus.FAILED
-            self._publish_failure(job, ctx, "Interrupted: the server is shutting down.")
-            raise
+            task = asyncio.current_task()
+            if not (job.cancel_requested and task is not None and task.cancelling() == 1):
+                job.status = JobStatus.FAILED
+                self._publish_failure(job, ctx, "Interrupted: the server is shutting down.")
+                raise
+            task.uncancel()  # our own cancel(): the job ends normally, as cancelled
+            await self._finish_cancelled(job, ctx)
+        except _JobCancelled:
+            await self._finish_cancelled(job, ctx)
         except (StepFailedError, TranslatorError, EngineError) as exc:
             # These messages are written by us for users: safe to forward.
             await self._fail(job, ctx, str(exc))
@@ -458,6 +517,7 @@ class Orchestrator:
         # The rollback runs while the job is still RUNNING: the project stays reserved,
         # so no start or removal can race `compose down` and the workspace deletion.
         # The status flips before the terminal event, which the inventory cache relies on.
+        job.finishing = True
         try:
             # Only a deployment rolls back: a failed stop or start never deletes an environment.
             if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
@@ -467,6 +527,20 @@ class Orchestrator:
         finally:
             job.status = JobStatus.FAILED
         self._publish_failure(job, ctx, message)
+
+    async def _finish_cancelled(self, job: Job, ctx: StepContext | None) -> None:
+        """Roll a cancelled deployment back like a failed one, then end the job. The job
+        stays RUNNING until then, so the project stays reserved during the rollback."""
+        job.finishing = True
+        rolled_back: bool | None = None  # None: nothing had been created yet
+        try:
+            if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
+                ctx.log("Cancelled by the user")
+                rolled_back = await self._rollback(job.stack, ctx)
+        finally:
+            job.status = JobStatus.CANCELLED
+        logger.info("Job %s cancelled", job.id)
+        self._bus.publish(job.id, EventType.JOB_CANCELLED, _cancelled_message(job, rolled_back))
 
     async def _report_unready_services(self, stack: StackHandle, ctx: StepContext) -> None:
         """Copy the last log lines of every service that did not become ready into the job,
@@ -500,7 +574,8 @@ class Orchestrator:
                 "Could not read the logs of %s before rollback", stack.project, exc_info=True
             )
 
-    async def _rollback(self, stack: StackHandle, ctx: StepContext) -> None:
+    async def _rollback(self, stack: StackHandle, ctx: StepContext) -> bool:
+        """Remove everything created for the project; False when something was left."""
         ctx.log("Rolling back: removing everything created for this project")
         try:
             await self._engine.remove(stack, ctx.log)
@@ -508,6 +583,8 @@ class Orchestrator:
         except Exception:
             logger.exception("Rollback of %s failed", stack.project)
             ctx.log("Rollback incomplete: see server logs")
+            return False
+        return True
 
     def _publish_failure(self, job: Job, ctx: StepContext | None, message: str) -> None:
         if ctx is not None:
@@ -906,6 +983,17 @@ def _accepted_message(job: Job) -> str:
         return f"Deployment of '{project}' accepted ({job.mode})"
     verbs = {"removal": "Removal", "stop": "Stop", "start": "Start", "restart": "Restart"}
     return f"{verbs[job.mode]} of '{project}' accepted"
+
+
+def _cancelled_message(job: Job, rolled_back: bool | None) -> str:
+    if job.mode == "planning":
+        return "Analysis cancelled"
+    project = job.project_name
+    if rolled_back is None:
+        return f"Deployment of '{project}' cancelled before anything was created"
+    if rolled_back:
+        return f"Deployment of '{project}' cancelled: everything created for it was removed"
+    return f"Deployment of '{project}' cancelled; its rollback is incomplete: see server logs"
 
 
 def _success_message(job: Job) -> str:

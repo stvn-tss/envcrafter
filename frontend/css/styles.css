@@ -430,6 +430,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
   transition: transform 0.4s ease;
 }
 .progress[data-outcome="error"] .progress-bar { background: var(--danger); }
+.progress[data-outcome="cancelled"] .progress-bar { background: var(--muted); }
 .progress-label { margin: 6px 0 0; }
 
 .job-result {
@@ -483,6 +484,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .step-meta { font-size: var(--text-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
 .step[data-state="running"] .step-meta { color: var(--accent); }
 .step[data-state="failed"] .step-meta { color: var(--danger); }
+.step[data-state="cancelled"] .step-meta { color: var(--muted); }
 .step-chevron { width: 14px; height: 14px; color: var(--muted); transition: transform 0.15s; }
 .step-toggle[aria-expanded="true"] .step-chevron { transform: rotate(180deg); }
 
@@ -493,6 +495,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 .step[data-state="done"] .step-icon { border-color: var(--success); background: var(--success); }
 .step[data-state="failed"] .step-icon { border-color: var(--danger); background: var(--danger); }
+.step[data-state="cancelled"] .step-icon { border-style: dashed; border-color: var(--muted); }
 
 .step-preview {
   margin: -4px 0 0; padding: 0 10px 8px 36px;
@@ -630,7 +633,9 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .settings-note { margin: 6px 0 0; }
 .settings-note a { color: var(--accent); }
 .field select.input { width: auto; min-width: 200px; font-family: var(--font); }
-.notify-offer { margin: 8px 0 0; }
+.job-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.job-controls:not(:has(> :not([hidden]))) { display: none; }
+.job-controls #job-cancel { margin-left: auto; }
 
 .table-wrap { overflow-x: auto; }
 .components { width: 100%; border-collapse: collapse; font-size: var(--text-md); }

@@ -108,6 +108,13 @@ export async function saveLlmKey(apiKey) {
   return response.json();
 }
 
+/** Stops a running deployment (rolled back) or AI analysis; the job ends with job.cancelled. */
+export async function cancelJob(jobId) {
+  const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  if (!response.ok) throw new ApiError(await readError(response));
+  return response.json();
+}
+
 /** Forgets the key saved from the UI; the .env key, if any, is used again. */
 export async function removeLlmKey() {
   const response = await fetch("/api/settings/llm-key", { method: "DELETE" });

@@ -22,6 +22,9 @@ TemplateId = Annotated[str, StringConstraints(pattern=TEMPLATE_ID_PATTERN)]
 JobMode = Literal["template", "prompt", "plan", "planning", "removal", "stop", "start", "restart"]
 # Jobs that create an environment: the only ones that roll back on failure.
 DEPLOY_MODES: frozenset[str] = frozenset({"template", "prompt", "plan"})
+# Jobs a user may cancel: a deployment (rolled back like a failure) or an AI analysis.
+# Removal and lifecycle jobs are short and must not stop halfway.
+CANCELLABLE_MODES: frozenset[str] = frozenset({"template", "prompt", "plan", "planning"})
 
 
 class StrictModel(BaseModel):

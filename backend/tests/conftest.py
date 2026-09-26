@@ -13,7 +13,7 @@ from app.policy.images import ImageAllowlist
 from app.translator.client import KeyRejectedError
 from app.translator.spec import StackSpec
 
-TERMINAL_TYPES = {"job.succeeded", "job.failed"}
+TERMINAL_TYPES = {"job.succeeded", "job.failed", "job.cancelled"}
 
 
 @pytest.fixture(scope="session")

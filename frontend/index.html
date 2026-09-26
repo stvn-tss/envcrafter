@@ -111,7 +111,10 @@
           <div class="progress-bar" id="job-progress-bar"></div>
         </div>
         <p id="job-progress-label" class="hint progress-label"></p>
-        <button type="button" class="text-button notify-offer" id="notify-offer" data-icon="bell" hidden>Notify me when it's done</button>
+        <div class="job-controls">
+          <button type="button" class="text-button notify-offer" id="notify-offer" data-icon="bell" hidden>Notify me when it's done</button>
+          <button type="button" class="button small danger" id="job-cancel" data-icon="close" hidden>Cancel</button>
+        </div>
         <div id="job-result" class="job-result" hidden></div>
         <div class="steps-head">
           <h3>Steps</h3>

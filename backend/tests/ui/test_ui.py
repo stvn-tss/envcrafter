@@ -205,3 +205,18 @@ def test_plan_review_then_deploy(page: Page, live_server_with_llm: LiveServer) -
 
     expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
     expect(page.locator("#job-result")).to_contain_text("http://lab.localhost")
+
+
+def test_a_running_deployment_can_be_cancelled(page: Page, live_server_slow: LiveServer) -> None:
+    errors = open_home(page, live_server_slow)
+    deploy_template(page, "Media Stack", "media")
+    cancel = page.locator("#job-cancel")
+    expect(cancel).to_be_visible()
+
+    cancel.click()
+
+    expect(page.locator("#status-badge")).to_have_text("Cancelled", timeout=20_000)
+    expect(page.locator("#job-result")).to_contain_text("cancelled")
+    expect(page.locator("#job-result").get_by_role("button", name="Start again")).to_be_visible()
+    expect(cancel).to_be_hidden()
+    assert errors == []

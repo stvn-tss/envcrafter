@@ -119,6 +119,7 @@ class JobStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class EventType(StrEnum):
@@ -130,9 +131,12 @@ class EventType(StrEnum):
     STEP_FAILED = "step.failed"
     JOB_SUCCEEDED = "job.succeeded"
     JOB_FAILED = "job.failed"
+    JOB_CANCELLED = "job.cancelled"  # stopped by the user; a deployment was rolled back
 
 
-TERMINAL_EVENTS = frozenset({EventType.JOB_SUCCEEDED, EventType.JOB_FAILED})
+TERMINAL_EVENTS = frozenset(
+    {EventType.JOB_SUCCEEDED, EventType.JOB_FAILED, EventType.JOB_CANCELLED}
+)
 
 
 class PlanStep(BaseModel):
@@ -174,6 +178,7 @@ class JobSummary(BaseModel):
     url: str | None
     urls: list[WebEndpoint] = Field(default_factory=list)
     plan_id: UUID | None = None  # set by a succeeded "planning" job
+    cancel_requested: bool = False  # a cancellation is under way
     events_url: str
 
 

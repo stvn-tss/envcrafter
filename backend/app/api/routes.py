@@ -32,9 +32,11 @@ from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogRe
 from app.services.llm_settings import SettingsStorageError
 from app.services.orchestrator import (
     Job,
+    JobNotCancellableError,
     ProjectNameConflictError,
     TranslatorUnavailableError,
     UnknownEnvironmentError,
+    UnknownJobError,
     UnknownPlanError,
     UnknownTemplateError,
     job_events_url,
@@ -59,6 +61,7 @@ def _summary(job: Job) -> JobSummary:
         # Job.plan_id is also set on a "plan" deployment job (the plan it consumed),
         # but that is internal pipeline state (_load_plan), never client-facing.
         plan_id=job.plan_id if job.mode == "planning" else None,
+        cancel_requested=job.cancel_requested,
         events_url=job_events_url(job.id),
     )
 
@@ -150,6 +153,23 @@ async def get_job(job_id: UUID, orchestrator: OrchestratorDep) -> JobSummary:
     job = orchestrator.get(job_id)
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown job")
+    return _summary(job)
+
+
+@router.post(
+    "/jobs/{job_id}/cancel",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_trusted_origin)],
+)
+async def cancel_job(job_id: UUID, orchestrator: OrchestratorDep) -> JobSummary:
+    """Stop a running deployment or AI analysis. A deployment is rolled back; the job then
+    ends with a `job.cancelled` event on `events_url`."""
+    try:
+        job = orchestrator.cancel(job_id)
+    except UnknownJobError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown job") from None
+    except JobNotCancellableError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     return _summary(job)
 
 

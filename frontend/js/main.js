@@ -1,6 +1,6 @@
 /** Entry point: wires the catalog, the request form, the dialogs, the settings and the status console. */
 import {
-  ApiError, createJob, createPlan, fetchActiveJobs, fetchJob, fetchPlan, fetchTemplates, removeEnvironment,
+  ApiError, cancelJob, createJob, createPlan, fetchActiveJobs, fetchJob, fetchPlan, fetchTemplates, removeEnvironment,
   runEnvironmentAction,
 } from "./api.js";
 import { Catalog, rankTemplates } from "./catalog.js";
@@ -28,8 +28,8 @@ const notifyOffer = document.querySelector("#notify-offer");
 
 const JOB_KEY = "envcrafter.job";
 const LIVE_STATES = new Set(["pending", "running", "starting", "degraded"]);
-const TERMINAL = new Set(["ready", "removed", "stopped", "running", "planned", "failed"]);
-const ACTIVE = new Set(["deploying", "removing", "stopping", "starting", "restarting", "planning"]);
+const TERMINAL = new Set(["ready", "removed", "stopped", "running", "planned", "failed", "cancelled"]);
+const ACTIVE = new Set(["deploying", "removing", "stopping", "starting", "restarting", "planning", "cancelling"]);
 
 /** The browser's time zone, sent with deployments and written to the workspace as ${EC_TZ}. */
 const TIMEZONE = (() => {
@@ -59,12 +59,14 @@ const HEADLINES = {
   starting: ({ project }) => `Starting ${project}`,
   restarting: ({ project }) => `Restarting ${project}`,
   planning: () => "Analyzing request",
+  cancelling: ({ project }) => (project ? `Cancelling ${project}` : "Cancelling analysis"),
   ready: ({ project }) => `✓ ${project} ready`,
   removed: ({ project }) => `✓ ${project} removed`,
   stopped: ({ project }) => `✓ ${project} stopped`,
   running: ({ project }) => `✓ ${project} running`,
   planned: () => "✓ Plan ready",
   failed: ({ project }) => (project ? `✕ ${project} failed` : "✕ Analysis failed"),
+  cancelled: ({ project }) => (project ? `${project} cancelled` : "Analysis cancelled"),
 };
 
 // Icons declared in the markup: <button data-icon="close">.
@@ -75,6 +77,15 @@ const statusConsole = new StatusConsole(statusPanel, {
   onReconnect: () => follow(activeJob),
   onChange: (next) => updateChrome(next),
   onReviewPlan: (planId) => openPlan(planId),
+  onCancel: async (job) => {
+    try {
+      await cancelJob(job.job_id);
+      environments.refresh();
+      return null;
+    } catch (error) {
+      return error instanceof ApiError ? error.message : "Unable to reach the EnvCrafter API.";
+    }
+  },
 });
 const removeDialog = new RemoveDialog(document.querySelector("#remove-dialog"), {
   onConfirm: (project) => run(() => removeEnvironment(project), {}),

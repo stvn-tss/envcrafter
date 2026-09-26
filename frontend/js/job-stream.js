@@ -16,7 +16,7 @@
  *      1013 means "you lagged": retry immediately, history fills the gap.
  */
 
-const TERMINAL_TYPES = new Set(["job.succeeded", "job.failed"]);
+const TERMINAL_TYPES = new Set(["job.succeeded", "job.failed", "job.cancelled"]);
 const FINAL_CLOSE_CODES = new Set([1000, 1008, 4404]);
 const CLOSE_LAGGED = 1013;
 const MAX_RETRIES = 8;

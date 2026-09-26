@@ -26,12 +26,14 @@ export const STATUS = {
   starting: { label: "Starting", tone: "running" },
   restarting: { label: "Restarting", tone: "running" },
   planning: { label: "Analyzing", tone: "running" },
+  cancelling: { label: "Cancelling", tone: "running" },
   ready: { label: "Ready", tone: "succeeded" },
   removed: { label: "Removed", tone: "succeeded" },
   stopped: { label: "Stopped", tone: "succeeded" },
   running: { label: "Running", tone: "succeeded" },
   planned: { label: "Plan ready", tone: "succeeded" },
   failed: { label: "Failed", tone: "failed" },
+  cancelled: { label: "Cancelled", tone: "idle" },
 };
 
 // Connection problems are the only transport states worth showing.
@@ -59,6 +61,8 @@ const MODES = {
   planning: { active: "planning", done: "planned", title: () => "AI analysis", started: () => "Analysis of the request started." },
 };
 const modeOf = (job) => MODES[job?.mode] ?? deployment;
+// Jobs the server lets the user cancel: deployments (rolled back) and AI analyses.
+const CANCELLABLE = new Set(["template", "prompt", "plan", "planning"]);
 
 /** 850 -> "0.9s" (precise), 42_000 -> "42s", 125_000 -> "2m 05s". */
 export function formatDuration(ms, precise = false) {
@@ -87,16 +91,20 @@ export class StatusConsole {
   #endedAt = null;
   #copyLines = [];
   #timer = 0;
+  #cancelRequested = false;
 
   /**
    * @param {{ onRemove: (target: { project: string, volumes: string[] | null }) => void,
    *           onReconnect: () => void, onChange: (summary: object) => void,
-   *           onReviewPlan: (planId: string) => void }} actions
+   *           onReviewPlan: (planId: string) => void,
+   *           onCancel: (job: object) => Promise<string | null> }} actions
+   *   onCancel resolves with an error message, or null once the server accepted it
    */
-  constructor(root, { onRemove, onReconnect, onChange, onReviewPlan }) {
+  constructor(root, { onRemove, onReconnect, onChange, onReviewPlan, onCancel }) {
     this.onRemove = onRemove;
     this.onChange = onChange;
     this.onReviewPlan = onReviewPlan;
+    this.onCancel = onCancel;
     this.badge = root.querySelector("#status-badge");
     this.connectionNote = root.querySelector("#connection-note");
     this.connectionText = root.querySelector("#connection-text");
@@ -113,8 +121,11 @@ export class StatusConsole {
     this.copyLogsButton = root.querySelector("#copy-logs");
     this.announcer = root.querySelector("#status-announcer");
 
+    this.cancelButton = root.querySelector("#job-cancel");
+
     this.retryButton.addEventListener("click", () => onReconnect());
     this.copyLogsButton.addEventListener("click", () => this.#copyLogs());
+    this.cancelButton.addEventListener("click", () => this.#requestCancel());
   }
 
   get summary() {
@@ -153,6 +164,9 @@ export class StatusConsole {
     this.empty.hidden = true;
     this.view.hidden = false;
     this.#setStatus(mode.active);
+    this.#cancelRequested = job?.cancel_requested === true;
+    if (this.#cancelRequested) this.#setStatus("cancelling");
+    this.#refreshCancel();
     this.#announce(mode.started(job));
   }
 
@@ -194,6 +208,9 @@ export class StatusConsole {
         break;
       case "job.failed":
         this.#finish("error", event, at);
+        break;
+      case "job.cancelled":
+        this.#finish("cancelled", event, at);
         break;
       default:
         break; // future event types only go to the copied logs
@@ -337,6 +354,7 @@ export class StatusConsole {
       running: `in progress${view.percent === null ? "" : ` · ${view.percent}%`} · ${duration(new Date())}`,
       done: `done · ${duration(view.endedAt)}`,
       failed: `failed · ${duration(view.endedAt)}`,
+      cancelled: "cancelled",
     }[view.state];
     view.meta.textContent = text.replace(/ · $/, "");
   }
@@ -344,7 +362,7 @@ export class StatusConsole {
   // ---- Progress & outcome --------------------------------------------------------
 
   #counts() {
-    const counts = { pending: 0, running: 0, done: 0, failed: 0 };
+    const counts = { pending: 0, running: 0, done: 0, failed: 0, cancelled: 0 };
     for (const { state } of this.#steps.values()) counts[state] += 1;
     return counts;
   }
@@ -373,14 +391,22 @@ export class StatusConsole {
     this.#endedAt = at;
     this.#stopTimer();
     if (outcome === "success") this.#setPercent(100, "Completed");
+    if (outcome === "cancelled") {
+      for (const view of this.#steps.values()) {
+        if (view.state !== "running") continue;
+        view.endedAt = at;
+        this.#setStepState(view, "cancelled");
+      }
+    }
     this.progress.dataset.outcome = outcome;
-    this.#setStatus(outcome === "success" ? modeOf(this.#job).done : "failed");
+    this.#setStatus({ success: modeOf(this.#job).done, error: "failed", cancelled: "cancelled" }[outcome]);
     this.#refreshElapsed();
+    this.#refreshCancel();
 
     this.result.dataset.outcome = outcome;
     this.result.replaceChildren(...this.#resultContent(outcome, event));
     this.result.hidden = false;
-    this.#announce(outcome === "success" ? event.message : `Failed: ${event.message}`);
+    this.#announce(outcome === "error" ? `Failed: ${event.message}` : event.message);
     if (outcome === "success" && this.#job?.mode === "planning" && this.#context.autoReview && typeof event.plan_id === "string") {
       this.onReviewPlan?.(event.plan_id);
     }
@@ -389,19 +415,19 @@ export class StatusConsole {
   #resultContent(outcome, event) {
     const children = [
       el("p", { className: "result-title" }, [
-        icon(outcome === "success" ? "check" : "alert"),
+        icon({ success: "check", error: "alert", cancelled: "close" }[outcome]),
         el("span", { text: event.message }),
       ]),
     ];
-    if (outcome === "error") {
-      if (this.#counts().failed) {
+    if (outcome !== "success") {
+      if (outcome === "error" && this.#counts().failed) {
         children.push(el("p", { className: "hint", text: "The failed step is open below with its logs." }));
       }
       const retry = this.#context.retry;
       if (typeof retry === "function") {
         const button = el("button", { className: "button primary", attrs: { type: "button" } }, [
           icon("retry"),
-          el("span", { text: "Retry" }),
+          el("span", { text: outcome === "cancelled" ? "Start again" : "Retry" }),
         ]);
         button.addEventListener("click", async () => {
           button.disabled = true;
@@ -514,8 +540,34 @@ export class StatusConsole {
       return;
     }
     const duration = formatDuration(this.#endedAt - this.#startedAt, true);
-    this.elapsed.textContent =
-      this.#status === "failed" ? `Failed after ${duration}` : `Completed in ${duration}`;
+    const prefix = { failed: "Failed after", cancelled: "Cancelled after" }[this.#status] ?? "Completed in";
+    this.elapsed.textContent = `${prefix} ${duration}`;
+  }
+
+  // ---- Cancellation ----------------------------------------------------------------
+
+  async #requestCancel() {
+    const job = this.#job;
+    if (!job || this.#cancelRequested || this.#endedAt) return;
+    this.#cancelRequested = true;
+    this.#refreshCancel();
+    const error = await this.onCancel?.(job);
+    if (this.#job !== job || this.#endedAt) return; // another job, or it ended meanwhile
+    if (error) {
+      this.#cancelRequested = false;
+      this.#refreshCancel();
+      showToast(error);
+      return;
+    }
+    this.#setStatus("cancelling");
+  }
+
+  /** Offered while a deployment or an analysis runs; disabled once requested. */
+  #refreshCancel() {
+    const offered = Boolean(this.#job) && CANCELLABLE.has(this.#job.mode) && !this.#endedAt;
+    this.cancelButton.hidden = !offered;
+    this.cancelButton.disabled = this.#cancelRequested;
+    this.cancelButton.lastChild.textContent = this.#cancelRequested ? "Cancelling…" : "Cancel";
   }
 
   #record(event, at) {

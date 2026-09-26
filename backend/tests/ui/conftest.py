@@ -76,6 +76,12 @@ def live_server(tmp_path: Path) -> Iterator[LiveServer]:
 
 
 @pytest.fixture
+def live_server_slow(tmp_path: Path) -> Iterator[LiveServer]:
+    """One second per simulated step: long enough to act on a running deployment."""
+    yield from _serve(tmp_path, delay=1.0, translator=None)
+
+
+@pytest.fixture
 def slow_live_server(tmp_path: Path) -> Iterator[LiveServer]:
     yield from _serve(tmp_path, delay=0.8, translator=None)
 

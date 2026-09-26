@@ -40,7 +40,7 @@ pytestmark = pytest.mark.skipif(
 
 UI_HOST = "envcrafter.localhost"
 ORIGIN = f"http://{UI_HOST}"
-TERMINAL = {"job.succeeded", "job.failed"}
+TERMINAL = {"job.succeeded", "job.failed", "job.cancelled"}
 
 
 def _api() -> httpx.Client:
@@ -58,6 +58,17 @@ def _follow(events_url: str, timeout: float = 1200) -> list[dict[str, Any]]:
             events.append(event)
             if event["type"] in TERMINAL:
                 return events
+
+
+def _wait_for_step(events_url: str, key: str, timeout: float = 600) -> None:
+    """Follow a job until one of its steps starts."""
+    sock = socket.create_connection(("127.0.0.1", 80))
+    with connect(f"ws://{UI_HOST}{events_url}", sock=sock, origin=ORIGIN) as ws:  # type: ignore[arg-type]
+        while True:
+            event = json.loads(ws.recv(timeout=timeout))
+            assert event["type"] not in TERMINAL, event
+            if event["type"] == "step.started" and event["step_key"] == key:
+                return
 
 
 def _wait_for_ui(host: str, attempts: int = 30) -> int:
@@ -223,6 +234,22 @@ def test_stop_and_start_keep_the_environment_routable() -> None:
             assert _wait_for_ui(f"{project}.localhost") < 400
         finally:
             _remove(api, project)
+
+
+def test_cancel_during_startup_leaves_nothing_behind() -> None:
+    """A real `compose up --wait` is killed mid-way, then rolled back."""
+    with _api() as api:
+        job = _post(api, "/api/jobs", {"mode": "template", "template_id": "glpi"})
+        project = job["project_name"]
+        _wait_for_step(job["events_url"], "container_deploy")
+        response = api.post(f"/api/jobs/{job['job_id']}/cancel", headers={"Origin": ORIGIN})
+        assert response.status_code == 202, response.text
+        events = _follow(job["events_url"])
+        assert events[-1]["type"] == "job.cancelled", events[-1]["message"]
+        assert api.get(f"/api/environments/{project}").status_code == 404
+    for listing in (("ps", "-a"), ("network", "ls"), ("volume", "ls")):
+        leftovers = _docker(*listing, "--filter", f"label=envcrafter.project={project}", "-q")
+        assert leftovers.strip() == "", listing
 
 
 @pytest.mark.skipif(
