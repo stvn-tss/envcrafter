@@ -636,6 +636,23 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .field-hint { margin: 0; font-size: var(--text-xs); color: var(--muted); }
 .field-hint[data-invalid] { color: var(--danger); }
 
+.check-list, .readiness-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.check-list li {
+  display: grid; grid-template-columns: 16px max-content minmax(0, 1fr); align-items: baseline; gap: 4px 10px;
+  font-size: var(--text-md);
+}
+.check-list .icon, .readiness-list .icon { width: 16px; height: 16px; flex: none; align-self: center; }
+.check-list [data-status="ok"] .icon, .readiness-list li:not([data-warning]) .icon { color: var(--success); }
+.check-list [data-status="warning"] .icon, .readiness-list [data-warning] .icon { color: var(--warning); }
+.check-list [data-status="error"] .icon { color: var(--danger); }
+.check-list [data-status="info"] .icon { color: var(--muted); }
+.check-list span { color: var(--text-2); }
+.readiness-list li { display: flex; align-items: flex-start; gap: 8px; font-size: var(--text-md); color: var(--text-2); }
+.readiness-list [data-warning] { color: var(--text); }
+@media (max-width: 520px) {
+  .check-list li { grid-template-columns: 16px minmax(0, 1fr); }
+  .check-list li span { grid-column: 2; }
+}
 .settings-form { display: grid; gap: 12px; margin-top: 12px; }
 .settings-form .footer-actions { margin-left: 0; justify-content: flex-end; }
 .key-status {

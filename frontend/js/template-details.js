@@ -9,18 +9,23 @@ import { componentsTable, networkSummary, section, volumesList, vulnerableCallou
 import { el } from "./dom.js";
 import { autoProjectName, projectNameProblem, webUrl } from "./environment.js";
 import { icon } from "./icons.js";
+import { readinessItems } from "./readiness.js";
 
 const NAME_HINT = "3–32 lowercase letters, digits or hyphens. Leave empty for a random name.";
 
 export class TemplateDetails {
   #template = null;
   #accessSection = null;
+  #readiness = null;
+  #readinessRequest = 0;
 
   /**
    * @param {{ onDeploy: (template: object, projectName: string | null) => Promise<string | null>,
-   *           categoryLabel: (id: string) => string }} options onDeploy resolves with an error message
+   *           categoryLabel: (id: string) => string,
+   *           fetchReadiness: (templateId: string) => Promise<object> }} options
+   *   onDeploy resolves with an error message
    */
-  constructor(dialog, { onDeploy, categoryLabel }) {
+  constructor(dialog, { onDeploy, categoryLabel, fetchReadiness }) {
     this.dialog = dialog;
     this.heading = dialog.querySelector("#dialog-heading");
     this.body = dialog.querySelector("#dialog-body");
@@ -30,6 +35,7 @@ export class TemplateDetails {
     this.deployButton = dialog.querySelector("#dialog-deploy");
     this.onDeploy = onDeploy;
     this.categoryLabel = categoryLabel;
+    this.fetchReadiness = fetchReadiness;
 
     const close = () => dialog.close();
     dialog.querySelector("#dialog-close").addEventListener("click", close);
@@ -67,9 +73,8 @@ export class TemplateDetails {
       section("Web access", this.#accessSection),
       section("Network", networkSummary(template.needs_internet)),
       section("Persistent storage", volumesList(template.volumes)),
-      section("Footprint", el("div", {}, [
-        el("ul", { className: "inline-list" }, footprintItems(template).map((text) => el("li", { text }))),
-        el("p", { className: "hint access-note", text: "Approximate, measured on linux/amd64. First start assumes images are already downloaded." }),
+      section("Before you deploy", this.#readiness = el("div", { className: "readiness", attrs: { "aria-live": "polite" } }, [
+        el("p", { className: "hint", text: "Checking this machine…" }),
       ])),
       ...(template.access_notes.length
         ? [section("Good to know", el("ul", { className: "notes" }, template.access_notes.map((note) => el("li", { text: note }))))]
@@ -79,6 +84,25 @@ export class TemplateDetails {
     this.dialog.showModal();
     this.body.scrollTop = 0;
     this.deployButton.focus();
+    this.#loadReadiness(template);
+  }
+
+  /** The capacity check of this machine, or the manifest footprint if it cannot be read. */
+  async #loadReadiness(template) {
+    const request = ++this.#readinessRequest;
+    let readiness = null;
+    try {
+      readiness = await this.fetchReadiness(template.id);
+    } catch {
+      readiness = null;
+    }
+    if (request !== this.#readinessRequest || this.#template !== template) return; // another template opened
+    this.#readiness.replaceChildren(...(readiness
+      ? readinessItems(readiness)
+      : [
+          el("ul", { className: "inline-list" }, footprintItems(template).map((text) => el("li", { text }))),
+          el("p", { className: "hint access-note", text: "Approximate, measured on linux/amd64. First start assumes images are already downloaded." }),
+        ]));
   }
 
   #projectName() {

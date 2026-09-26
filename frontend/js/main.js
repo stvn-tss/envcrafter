@@ -1,7 +1,7 @@
 /** Entry point: wires the catalog, the request form, the dialogs, the settings and the status console. */
 import {
-  ApiError, cancelJob, createJob, createPlan, fetchActiveJobs, fetchJob, fetchPlan, fetchTemplates, removeEnvironment,
-  runEnvironmentAction,
+  ApiError, cancelJob, createJob, createPlan, fetchActiveJobs, fetchJob, fetchPlan, fetchReadiness, fetchSystem,
+  fetchTemplates, removeEnvironment, runEnvironmentAction,
 } from "./api.js";
 import { Catalog, rankTemplates } from "./catalog.js";
 import { loadConfig } from "./config.js";
@@ -13,6 +13,7 @@ import { LogsDialog } from "./logs-dialog.js";
 import { enableNotifications, notificationState, notifyIfAway } from "./notifications.js";
 import { PlanReview } from "./plan-review.js";
 import { PromptForm } from "./prompt-form.js";
+import { checkItems, hasError } from "./readiness.js";
 import { RemoveDialog } from "./remove-dialog.js";
 import { SettingsDialog } from "./settings-dialog.js";
 import { STATUS, StatusConsole } from "./status-console.js";
@@ -94,6 +95,7 @@ const logsDialog = new LogsDialog(document.querySelector("#logs-dialog"));
 const details = new TemplateDetails(document.querySelector("#template-dialog"), {
   onDeploy: (template, projectName) => deployTemplate(template, projectName),
   categoryLabel,
+  fetchReadiness,
 });
 const catalog = new Catalog(document.querySelector("#catalog"), {
   onDetails: (template) => details.open(template),
@@ -326,8 +328,41 @@ async function loadCatalog() {
   }
 }
 
+const SETUP_KEY = "envcrafter.setup-dismissed";
+const setupPanel = document.querySelector("#setup-check");
+
+function setupDismissed() {
+  try {
+    return localStorage.getItem(SETUP_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** First visit: the whole checklist; afterwards, only when Docker or the proxy is down. */
+async function loadSetupCheck() {
+  let system;
+  try {
+    system = await fetchSystem();
+  } catch {
+    return; // the API itself is down: the rest of the page already says so
+  }
+  document.querySelector("#setup-list").replaceChildren(...checkItems(system));
+  setupPanel.hidden = setupDismissed() && !hasError(system);
+}
+
+document.querySelector("#setup-dismiss").addEventListener("click", () => {
+  try {
+    localStorage.setItem(SETUP_KEY, "1");
+  } catch {
+    /* storage unavailable: hidden until the page is reloaded */
+  }
+  setupPanel.hidden = true;
+});
+
 async function init() {
   const capabilities = await loadConfig();
+  loadSetupCheck();
   document.querySelector("#engine-banner").hidden = capabilities.engine !== "simulated";
   promptForm.setAvailability(capabilities.llm_available);
   await loadCatalog();

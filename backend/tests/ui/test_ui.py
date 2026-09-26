@@ -48,10 +48,12 @@ def test_home_loads_cleanly_and_passes_axe(
     expect(page.locator("#prompt-input")).to_be_enabled()
     expect(page.locator("#prompt-unavailable")).to_contain_text("Claude API key")
     expect(page.get_by_role("button", name="Find templates")).to_be_visible()
+    expect(page.locator("#setup-check")).to_be_visible()
 
     assert serious_violations(page) == []
     page.get_by_role("button", name="Settings").click()
     expect(page.locator("#settings-dialog")).to_be_visible()
+    expect(page.locator("#settings-system")).to_contain_text("Docker")
     assert serious_violations(page) == []
     assert errors == []
 
@@ -238,3 +240,38 @@ def test_dashboard_lists_services_and_restarts_one(page: Page, live_server: Live
     expect(page.locator("#job-title")).to_have_text("Restart of sonarr in media")
     expect(page.locator("#status-badge")).to_have_text("Running", timeout=15_000)
     assert errors == []
+
+
+def test_setup_check_shows_on_first_visit_until_dismissed(
+    page: Page, live_server: LiveServer
+) -> None:
+    errors = open_home(page, live_server)
+    panel = page.locator("#setup-check")
+    expect(panel).to_be_visible()
+    expect(panel).to_contain_text("Simulated engine")
+    expect(panel).to_contain_text("AI plans are off")
+
+    page.get_by_role("button", name="Got it").click()
+    expect(panel).to_be_hidden()
+    page.reload()
+    expect(page.locator(".template-card").first).to_be_visible()
+    expect(panel).to_be_hidden()
+    assert errors == []
+
+
+def test_template_dialog_shows_what_the_deployment_needs(
+    page: Page, live_server: LiveServer
+) -> None:
+    errors = open_home(page, live_server)
+    page.get_by_role("button", name="Details of Media Stack").click()
+    dialog = page.locator("#template-dialog")
+    expect(dialog).to_contain_text("About 1.0 GB to download (5 of 5 images)")
+    expect(dialog).to_contain_text("Needs about 750 MB of memory · 6.0 GB available")
+    page.locator("#project-name").fill("media")
+    page.locator("#dialog-deploy").click()
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+
+    page.get_by_role("button", name="Details of Media Stack").click()
+    expect(dialog).to_contain_text("All 5 images are already downloaded")
+    assert errors == []
+

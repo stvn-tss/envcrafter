@@ -5,10 +5,11 @@
  * checks it with the Claude API before storing it. The server never sends it back: the
  * dialog shows where the active key comes from and its last characters only.
  */
-import { ApiError, fetchSettings, removeLlmKey, saveLlmKey } from "./api.js";
+import { ApiError, fetchSettings, fetchSystem, removeLlmKey, saveLlmKey } from "./api.js";
 import { el } from "./dom.js";
 import { icon } from "./icons.js";
 import { disableNotifications, enableNotifications, notificationState } from "./notifications.js";
+import { checkItems } from "./readiness.js";
 
 const THEME_KEY = "envcrafter.theme";
 const KEY_FORMAT = /^[A-Za-z0-9_-]{20,256}$/;
@@ -66,6 +67,7 @@ export class SettingsDialog {
     this.notifyToggle = dialog.querySelector("#notify-toggle");
     this.notifyNote = dialog.querySelector("#notify-note");
     this.themeSelect = dialog.querySelector("#theme-select");
+    this.systemList = dialog.querySelector("#settings-system");
 
     for (const button of dialog.querySelectorAll("[data-close]")) button.addEventListener("click", () => dialog.close());
     dialog.addEventListener("click", (event) => {
@@ -97,6 +99,11 @@ export class SettingsDialog {
       this.#render(sanitizeStatus(await fetchSettings()));
     } catch {
       this.statusLine.replaceChildren(el("span", { text: "The settings could not be loaded." }));
+    }
+    try {
+      this.systemList.replaceChildren(...checkItems(await fetchSystem()));
+    } catch {
+      this.systemList.replaceChildren(el("li", {}, [el("span", { className: "hint", text: "The system checks could not be loaded." })]));
     }
   }
 

@@ -92,6 +92,16 @@ export function fetchPlan(planId) {
   return getJson(`/api/plans/${encodeURIComponent(planId)}`);
 }
 
+/** First-run checklist: Docker, reverse proxy, memory, disk, AI key (GET /api/system). */
+export function fetchSystem() {
+  return getJson("/api/system");
+}
+
+/** What deploying a template needs on this machine (GET /api/templates/{id}/readiness). */
+export function fetchReadiness(templateId) {
+  return getJson(`/api/templates/${encodeURIComponent(templateId)}/readiness`);
+}
+
 /** Whether a Claude API key is configured, and where it comes from (never the key). */
 export function fetchSettings() {
   return getJson("/api/settings");

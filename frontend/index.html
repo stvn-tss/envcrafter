@@ -27,6 +27,14 @@
 
   <main class="layout">
     <div class="main-column">
+      <section id="setup-check" class="panel setup-check" aria-labelledby="setup-title" hidden>
+        <div class="panel-header">
+          <h2 id="setup-title">Setup check</h2>
+          <button type="button" class="button small" id="setup-dismiss">Got it</button>
+        </div>
+        <ul id="setup-list" class="check-list"></ul>
+      </section>
+
       <section class="panel" aria-labelledby="prompt-title">
         <h2 id="prompt-title">Describe an environment</h2>
         <form id="prompt-form" class="prompt-form">
@@ -242,6 +250,10 @@
             <option value="dark">Dark</option>
           </select>
         </div>
+      </section>
+      <section class="dialog-section" aria-labelledby="settings-system-title">
+        <h3 id="settings-system-title">System</h3>
+        <ul id="settings-system" class="check-list"><li><span class="hint">Checking…</span></li></ul>
       </section>
     </div>
   </dialog>
