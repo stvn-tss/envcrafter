@@ -38,7 +38,9 @@ export class EnvironmentDrawer {
   #activityJob = null; // the environment's job when the activity was last loaded
   #activityRunning = false; // the last activity still shows a running job
   #serviceRows = new Map();
-  #linksKey = "";
+  // What each part was last built from: an unchanged part is left alone, so a poll never
+  // drops the text the reader is selecting (to copy the sign-in notes, say).
+  #renderedFrom = new Map();
 
   /**
    * @param {HTMLDialogElement} dialog
@@ -79,7 +81,7 @@ export class EnvironmentDrawer {
     this.#usageAvailable = true;
     this.#serviceRows = new Map();
     this.servicesList.replaceChildren();
-    this.#linksKey = "";
+    this.#renderedFrom.clear();
     this.titleInput.value = typeof environment.title === "string" ? environment.title : environment.project;
     this.notesInput.value = typeof environment.notes === "string" ? environment.notes : "";
     this.#setSaveStatus("");
@@ -211,7 +213,7 @@ export class EnvironmentDrawer {
 
     const failure = environment.failure;
     this.failure.hidden = typeof failure?.message !== "string";
-    if (!this.failure.hidden) {
+    if (!this.failure.hidden && this.#changed("failure", failure.message)) {
       this.failure.replaceChildren(icon("alert"), el("span", {
         text: `The deployment failed: ${failure.message} It was kept for debugging: read its logs, then remove it.`,
       }));
@@ -221,10 +223,20 @@ export class EnvironmentDrawer {
     this.#renderLinks(environment);
     const notes = (this.handlers.notesFor(environment) ?? []).filter((note) => typeof note === "string");
     this.signInSection.hidden = notes.length === 0;
-    this.signInList.replaceChildren(...notes.map((note) => el("li", { text: note })));
+    if (this.#changed("signIn", notes)) {
+      this.signInList.replaceChildren(...notes.map((note) => el("li", { text: note })));
+    }
     this.#renderOptions(environment);
     this.#renderServices();
     this.#renderStorage(environment);
+  }
+
+  /** True when `part` must be built again: what it shows differs from the last build. */
+  #changed(part, source) {
+    const key = JSON.stringify(source);
+    if (this.#renderedFrom.get(part) === key) return false;
+    this.#renderedFrom.set(part, key);
+    return true;
   }
 
   #renderActions(environment) {
@@ -245,9 +257,7 @@ export class EnvironmentDrawer {
   #renderLinks(environment) {
     const urls = availableActions(environment).links ? webAddresses(environment) : [];
     this.linksSection.hidden = urls.length === 0 || this.#removed;
-    const key = JSON.stringify(urls.map((item) => [item.name, item.url]));
-    if (key === this.#linksKey) return;
-    this.#linksKey = key;
+    if (!this.#changed("links", urls.map((item) => [item.name, item.url]))) return;
     this.linksList.replaceChildren(...urls.map((item) => el("li", {}, [
       el("span", { className: "url-name", text: item.name }),
       el("a", { text: item.url, attrs: { href: item.url, target: "_blank", rel: "noopener noreferrer" } }),
@@ -270,13 +280,14 @@ export class EnvironmentDrawer {
         else if (Array.isArray(definition?.options)) {
           shown = definition.options.find((option) => option.value === value)?.label ?? value;
         }
-        return el("li", {}, [
-          el("span", { className: "option-name", text: definition?.label ?? name }),
-          el("span", { text: shown }),
-        ]);
+        return [definition?.label ?? name, shown];
       });
     this.optionsSection.hidden = rows.length === 0;
-    this.optionsList.replaceChildren(...rows);
+    if (!this.#changed("options", rows)) return;
+    this.optionsList.replaceChildren(...rows.map(([label, shown]) => el("li", {}, [
+      el("span", { className: "option-name", text: label }),
+      el("span", { text: shown }),
+    ])));
   }
 
   /** Each service with its state, CPU and memory, and a restart of that service alone. */
@@ -343,6 +354,7 @@ export class EnvironmentDrawer {
   #renderStorage(environment) {
     const volumes = (Array.isArray(environment.volumes) ? environment.volumes : [])
       .filter((volume) => typeof volume === "string");
+    if (!this.#changed("storage", volumes)) return;
     this.storage.replaceChildren(...(volumes.length
       ? [
           el("ul", { className: "inline-list mono" }, volumes.map((volume) => el("li", { text: volume }))),

@@ -183,6 +183,14 @@ def test_a_failed_deployment_can_be_kept_for_debugging(
     row = page.locator(".environment", has=page.locator("code", has_text="shop"))
     expect(row.locator(".status-badge")).to_have_text("Failed", timeout=15_000)
     expect(row.locator(".environment-meta")).to_contain_text("kept for debugging")
+    row.get_by_role("button", name="Details of shop").click()
+    reason = page.locator("#environment-drawer .drawer-failure span")
+    expect(reason).to_contain_text("It was kept for debugging")
+    page.evaluate(
+        "() => { window.failureReason = document.querySelector('.drawer-failure span'); }"
+    )
+    _two_dashboard_polls(page)
+    assert page.evaluate("() => window.failureReason.isConnected")  # still selectable
     assert errors == []
 
 
@@ -244,6 +252,51 @@ def test_the_environment_drawer_gathers_everything(page: Page, live_server: Live
     ).click()
     expect(drawer.get_by_label("Notes")).to_have_value("Switch to high tomorrow.")
     expect(drawer.locator("#drawer-title")).to_have_text("SQLi practice")
+    assert errors == []
+
+
+def _two_dashboard_polls(page: Page) -> None:
+    """The dashboard polls every 5 s; after the second answer, the first one is rendered."""
+    for _ in range(2):
+        with page.expect_response(lambda response: response.url.endswith("/api/environments")):
+            pass
+
+
+def test_the_drawer_keeps_the_readers_selection_across_refreshes(
+    page: Page, live_server: LiveServer
+) -> None:
+    """Every poll refreshes the open drawer: a sign-in note being selected to copy it must
+    survive that, so the parts that did not change are never rebuilt."""
+    errors = open_home(page, live_server)
+    deploy_template(page, "DVWA", "lab")
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+    page.locator(".environment", has=page.locator("code", has_text="lab")).get_by_role(
+        "button", name="Details of lab"
+    ).click()
+    expect(page.locator("#environment-drawer")).to_contain_text("admin / password")
+    selected = page.evaluate(
+        """() => {
+            const drawer = document.querySelector("#environment-drawer");
+            const notes = drawer.querySelector("ul.notes");
+            window.drawerNodes = [
+                notes.firstElementChild,
+                drawer.querySelector(".option-list li"),
+                drawer.querySelector(".inline-list.mono li"),
+            ];
+            const range = document.createRange();
+            range.selectNodeContents(notes);
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(range);
+            return window.getSelection().toString();
+        }"""
+    )
+    assert "admin / password" in selected
+    assert page.evaluate("() => window.drawerNodes.every((node) => node !== null)")
+
+    _two_dashboard_polls(page)
+
+    assert page.evaluate("() => window.getSelection().toString()") == selected
+    assert page.evaluate("() => window.drawerNodes.every((node) => node.isConnected)")
     assert errors == []
 
 
