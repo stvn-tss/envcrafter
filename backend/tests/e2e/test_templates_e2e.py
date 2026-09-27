@@ -260,6 +260,27 @@ def test_cancel_during_startup_leaves_nothing_behind() -> None:
         assert leftovers.strip() == "", listing
 
 
+def test_the_api_cannot_copy_files_in_or_out_of_containers() -> None:
+    """Least privilege: the archive endpoint behind `docker cp` (and Compose configs, see
+    roadmap decision 27) stays closed on the API's socket proxy. It would let the API read
+    or write any file in any container, the control plane's included."""
+    command = [
+        "docker",
+        "exec",
+        "envcrafter-api",
+        "env",
+        "DOCKER_HOST=tcp://socket-proxy-api:2375",
+        "docker",
+        "cp",
+        "envcrafter-traefik:/etc/traefik/traefik.yml",
+        "-",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)  # noqa: S603
+    assert result.returncode != 0
+    assert "403" in result.stderr or "forbidden" in result.stderr.lower(), result.stderr
+    assert "entryPoints" not in result.stdout
+
+
 def _image_present(ref: str) -> bool:
     command = ["docker", "image", "inspect", ref]
     return subprocess.run(command, capture_output=True, check=False).returncode == 0  # noqa: S603
