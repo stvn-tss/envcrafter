@@ -21,7 +21,8 @@ export class TemplateDetails {
   #parameterInputs = new Map(); // parameter name -> () => value
 
   /**
-   * @param {{ onDeploy: (template: object, projectName: string | null, options: { parameters: object }) => Promise<string | null>,
+   * @param {{ onDeploy: (template: object, projectName: string | null,
+   *                       options: { parameters: object, keepOnFailure: boolean }) => Promise<string | null>,
    *           categoryLabel: (id: string) => string,
    *           fetchReadiness: (templateId: string) => Promise<object>,
    *           takenNames: () => Set<string> }} options
@@ -35,6 +36,7 @@ export class TemplateDetails {
     this.nameHint = dialog.querySelector("#project-name-hint");
     this.error = dialog.querySelector("#dialog-error");
     this.deployButton = dialog.querySelector("#dialog-deploy");
+    this.keepInput = dialog.querySelector("#keep-on-failure");
     this.onDeploy = onDeploy;
     this.categoryLabel = categoryLabel;
     this.fetchReadiness = fetchReadiness;
@@ -58,6 +60,7 @@ export class TemplateDetails {
     this.#template = template;
     this.nameInput.value = "";
     this.nameInput.placeholder = nextProjectName(template.id, this.takenNames());
+    this.keepInput.checked = false;
     this.#hideError();
     this.deployButton.disabled = false;
 
@@ -186,7 +189,10 @@ export class TemplateDetails {
     if (!this.#template || projectNameProblem(name) !== null || this.deployButton.disabled) return;
     this.#hideError();
     this.deployButton.disabled = true;
-    const error = await this.onDeploy(this.#template, name || null, { parameters: this.#parameterValues() });
+    const error = await this.onDeploy(this.#template, name || null, {
+      parameters: this.#parameterValues(),
+      keepOnFailure: this.keepInput.checked,
+    });
     this.deployButton.disabled = false;
     if (error) {
       this.error.replaceChildren(icon("alert"), el("span", { text: error }));

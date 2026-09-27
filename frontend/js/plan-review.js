@@ -15,7 +15,8 @@ export class PlanReview {
   #access = null;
 
   /**
-   * @param {{ onDeploy: (plan: object, projectName: string | null) => Promise<string | null>,
+   * @param {{ onDeploy: (plan: object, projectName: string | null, options: { keepOnFailure: boolean })
+   *             => Promise<string | null>,
    *           takenNames: () => Set<string> }} options
    */
   constructor(dialog, { onDeploy, takenNames }) {
@@ -26,6 +27,7 @@ export class PlanReview {
     this.nameHint = dialog.querySelector("#plan-project-hint");
     this.error = dialog.querySelector("#plan-error");
     this.deployButton = dialog.querySelector("#plan-deploy");
+    this.keepInput = dialog.querySelector("#plan-keep-on-failure");
     this.onDeploy = onDeploy;
     this.takenNames = takenNames;
     const close = () => dialog.close();
@@ -62,6 +64,7 @@ export class PlanReview {
       el("p", { className: "hint", text: Number.isNaN(expires.getTime()) ? "" : `This plan stays available until ${expires.toLocaleTimeString()}.` }),
     );
     this.nameInput.value = "";
+    this.keepInput.checked = false;
     this.nameInput.placeholder = nextProjectName(plan.template_id ?? "env", this.takenNames());
     this.#hideError();
     this.#refreshName();
@@ -92,7 +95,7 @@ export class PlanReview {
     if (!this.#plan || projectNameProblem(name) !== null || this.deployButton.disabled) return;
     this.#hideError();
     this.deployButton.disabled = true;
-    const error = await this.onDeploy(this.#plan, name || null);
+    const error = await this.onDeploy(this.#plan, name || null, { keepOnFailure: this.keepInput.checked });
     this.deployButton.disabled = false;
     if (error) {
       this.error.replaceChildren(icon("alert"), el("span", { text: error }));

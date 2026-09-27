@@ -635,6 +635,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .field .input { font-family: var(--mono); font-size: var(--text-md); }
 .field-hint { margin: 0; font-size: var(--text-xs); color: var(--muted); }
 .field-hint[data-invalid] { color: var(--danger); }
+.field .keep-field { margin-top: 6px; font-size: var(--text-sm); font-weight: 400; color: var(--text-2); }
 
 .check-list, .readiness-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .parameter-list { display: grid; gap: 12px; }

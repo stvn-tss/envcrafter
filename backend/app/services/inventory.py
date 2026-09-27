@@ -145,6 +145,13 @@ class EnvironmentInventory:
             if statuses is None
             else summarize_state([service.service for service in services], statuses)
         )
+        if (
+            meta is not None
+            and meta.failure is not None
+            and state not in (EnvironmentState.RUNNING, EnvironmentState.UNKNOWN)
+        ):
+            # Kept for debugging after a failed deployment, until a full start succeeds.
+            state = EnvironmentState.FAILED
         job = self._jobs.active_job(record.project)
         return EnvironmentView(
             project=record.project,
@@ -159,6 +166,7 @@ class EnvironmentInventory:
             job=_job_ref(job) if job is not None else None,
             notes=meta.notes if meta is not None else "",
             parameters=dict(meta.parameters) if meta is not None else {},
+            failure=meta.failure if meta is not None else None,
         )
 
     @staticmethod

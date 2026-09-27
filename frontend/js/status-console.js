@@ -428,11 +428,19 @@ export class StatusConsole {
       if (outcome === "error" && this.#counts().failed) {
         children.push(el("p", { className: "hint", text: "The failed step is open below with its logs." }));
       }
+      const keptProject = outcome === "error" && event.kept === true ? this.#job?.project_name : null;
+      if (keptProject) {
+        children.push(el("p", {
+          className: "hint",
+          text: "Kept for debugging: its containers, logs and data are still there. Remove it once you are done.",
+        }));
+      }
       if (outcome === "error" && event.retryable === false && this.#job?.mode === "planning") {
         children.push(el("p", { className: "hint", text: "Change the request, then generate a new plan." }));
       }
       // A refusal (policy, unsupported request, expired plan) would fail again the same way:
       // Retry is offered only when the server says the same request may succeed.
+      const actions = [];
       const retry = this.#context.retry;
       if (typeof retry === "function" && (outcome === "cancelled" || event.retryable === true)) {
         const button = el("button", { className: "button primary", attrs: { type: "button" } }, [
@@ -445,8 +453,15 @@ export class StatusConsole {
           button.disabled = false;
           if (error) showToast(error);
         });
-        children.push(el("div", { className: "result-actions" }, [button]));
+        actions.push(button);
       }
+      if (keptProject) {
+        const template = this.#context.template ?? null;
+        const remove = el("button", { className: "button danger", text: "Remove environment", attrs: { type: "button" } });
+        remove.addEventListener("click", () => this.onRemove({ project: keptProject, volumes: template ? template.volumes : null }));
+        actions.push(remove);
+      }
+      if (actions.length) children.push(el("div", { className: "result-actions" }, actions));
       return children;
     }
     if (this.#job?.mode === "planning") {

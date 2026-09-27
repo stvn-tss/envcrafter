@@ -53,6 +53,9 @@ class TemplateDeploymentRequest(StrictModel):
     template_id: TemplateId
     project_name: ProjectName | None = None
     timezone: TimeZoneName | None = None
+    # Keep what was created if the deployment fails, for debugging; a cancellation
+    # still removes it.
+    keep_on_failure: bool = False
     # Values of the template's parameters (see its manifest), checked against the catalog
     # when the job is submitted; omitted ones take their default.
     parameters: dict[SecretName, StrictBool | ParameterValue] = Field(
@@ -68,6 +71,9 @@ class PromptDeploymentRequest(StrictModel):
     prompt: Prompt
     project_name: ProjectName | None = None
     timezone: TimeZoneName | None = None
+    # Keep what was created if the deployment fails, for debugging; a cancellation
+    # still removes it.
+    keep_on_failure: bool = False
 
 
 class PlanRequest(StrictModel):
@@ -83,6 +89,9 @@ class PlanDeploymentRequest(StrictModel):
     plan_id: UUID
     project_name: ProjectName | None = None
     timezone: TimeZoneName | None = None
+    # Keep what was created if the deployment fails, for debugging; a cancellation
+    # still removes it.
+    keep_on_failure: bool = False
 
 
 class DeploymentRequest(
@@ -174,6 +183,7 @@ class JobEvent(BaseModel):
     # Only on job.failed: whether the same request may succeed if sent again (a refusal of
     # the policy or of the AI will not).
     retryable: bool | None = None
+    kept: bool | None = None  # only on job.failed: the deployment was kept for debugging
 
 
 class JobSummary(BaseModel):

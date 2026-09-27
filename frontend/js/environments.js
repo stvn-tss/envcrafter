@@ -20,6 +20,7 @@ const STATES = {
   degraded: { label: "Degraded", tone: "warning" },
   stopped: { label: "Stopped", tone: "idle" },
   missing: { label: "Missing", tone: "failed" },
+  failed: { label: "Failed", tone: "failed" }, // a failed deployment kept for debugging
   unknown: { label: "Unknown", tone: "idle" },
 };
 const JOB_LABELS = {
@@ -41,7 +42,10 @@ function serviceState(service) {
   const label = service.state.charAt(0).toUpperCase() + service.state.slice(1, 20);
   return { label, tone: service.state === "exited" ? "idle" : "warning" };
 }
-const CAN_START = new Set(["stopped", "degraded", "missing"]);
+const CAN_START = new Set(["stopped", "degraded", "missing", "failed"]);
+// A failed deployment kept for debugging: some services may run, and its addresses show
+// what is being debugged.
+const IN_PLACE = new Set([...CAN_STOP, "failed"]);
 const actionControls = (row) => [row.stop, row.start, row.restart, row.remove];
 
 export class EnvironmentsPanel {
@@ -211,6 +215,7 @@ export class EnvironmentsPanel {
       origin,
       `${services.length} service${services.length === 1 ? "" : "s"}`,
       created && !Number.isNaN(created.getTime()) ? `created ${created.toLocaleString()}` : null,
+      environment.failure ? "failed deployment, kept for debugging" : null,
     ].filter(Boolean).join(" · ");
 
     this.#renderLinks(row, environment);
@@ -219,7 +224,7 @@ export class EnvironmentsPanel {
 
     row.progress.hidden = !busy;
     row.logs.disabled = Boolean(busy) || services.length === 0;
-    row.stop.hidden = !CAN_STOP.has(environment.state);
+    row.stop.hidden = !IN_PLACE.has(environment.state);
     row.start.hidden = !CAN_START.has(environment.state);
     row.restart.hidden = !CAN_STOP.has(environment.state);
     for (const control of actionControls(row)) control.disabled = Boolean(busy) || environment.state === "pending";
@@ -227,7 +232,7 @@ export class EnvironmentsPanel {
 
   /** Every web UI while the environment runs, main one first. Rebuilt only on change. */
   #renderLinks(row, environment) {
-    const urls = CAN_STOP.has(environment.state) && Array.isArray(environment.urls)
+    const urls = IN_PLACE.has(environment.state) && Array.isArray(environment.urls)
       ? environment.urls.filter((item) => typeof item?.name === "string" && isEnvironmentUrl(item?.url))
       : [];
     const key = JSON.stringify(urls.map((item) => [item.name, item.url]));
@@ -248,7 +253,7 @@ export class EnvironmentsPanel {
       .filter((service) => SERVICE.test(service?.service ?? ""));
     row.services.hidden = services.length === 0;
     row.servicesSummary.textContent = `Services (${services.length})`;
-    const canRestart = !busy && CAN_STOP.has(environment.state);
+    const canRestart = !busy && IN_PLACE.has(environment.state);
     const seen = new Set();
     for (const service of services) {
       seen.add(service.service);

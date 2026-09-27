@@ -96,6 +96,7 @@ class JobEventBus:
         percent: int | None = None,
         plan_id: UUID | None = None,
         retryable: bool | None = None,
+        kept: bool | None = None,
     ) -> JobEvent:
         channel = self._channels.get(job_id)
         if channel is None:
@@ -118,6 +119,7 @@ class JobEventBus:
             percent=percent,
             plan_id=plan_id,
             retryable=retryable,
+            kept=kept,
         )
         channel.next_seq += 1
         if event_type == EventType.STEP_PROGRESS:

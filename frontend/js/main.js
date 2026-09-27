@@ -118,9 +118,10 @@ const promptForm = new PromptForm(document.querySelector("#prompt-form"), {
 });
 const planReview = new PlanReview(document.querySelector("#plan-dialog"), {
   takenNames: () => takenNames(),
-  onDeploy: (plan, projectName) => {
+  onDeploy: (plan, projectName, { keepOnFailure = false } = {}) => {
     const payload = withTimezone({ mode: "plan", plan_id: plan.plan_id });
     if (projectName) payload.project_name = projectName;
+    if (keepOnFailure) payload.keep_on_failure = true;
     return run(() => createJob(payload), { title: plan.title, templateId: plan.template_id ?? undefined });
   },
 });
@@ -267,10 +268,11 @@ async function resumeJob() {
   }
 }
 
-function deployTemplate(template, projectName = null, { parameters = {} } = {}) {
+function deployTemplate(template, projectName = null, { parameters = {}, keepOnFailure = false } = {}) {
   const payload = withTimezone({ mode: "template", template_id: template.id });
   if (projectName) payload.project_name = projectName;
   if (Object.keys(parameters).length) payload.parameters = parameters;
+  if (keepOnFailure) payload.keep_on_failure = true;
   return run(() => createJob(payload), { title: template.name, template });
 }
 

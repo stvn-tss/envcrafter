@@ -54,6 +54,7 @@ from app.models.deployment import (
     TemplateDeploymentRequest,
 )
 from app.models.environment import (
+    DeploymentFailure,
     EnvironmentMeta,
     EnvironmentService,
     EnvironmentUpdate,
@@ -192,6 +193,7 @@ class Job:
     cancel_delivered: bool = False
     interruptible: bool = False
     finishing: bool = False
+    kept: bool = False  # a failed deployment left in place (keep_on_failure)
     task: asyncio.Task[None] | None = field(default=None, repr=False)
 
 
@@ -601,7 +603,11 @@ class Orchestrator:
             if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
                 if ctx.step.key == "container_deploy":
                     await self._report_unready_services(job.stack, ctx)
-                await self._rollback(job.stack, ctx)
+                if job.request is not None and job.request.keep_on_failure:
+                    await self._keep_failed(job.stack, ctx, message)
+                    job.kept = True
+                else:
+                    await self._rollback(job.stack, ctx)
         finally:
             job.status = JobStatus.FAILED
         self._publish_failure(job, ctx, message)
@@ -620,6 +626,20 @@ class Orchestrator:
         logger.info("Job %s cancelled", job.id)
         job.message = _cancelled_message(job, rolled_back)
         self._bus.publish(job.id, EventType.JOB_CANCELLED, job.message)
+
+    async def _keep_failed(self, stack: StackHandle, ctx: StepContext, message: str) -> None:
+        """keep_on_failure: nothing is removed, and the environment is marked as a failed
+        deployment until a full start succeeds."""
+        ctx.log(
+            "Kept for debugging: nothing was removed. Remove the environment once you are done."
+        )
+        failure = DeploymentFailure(at=datetime.now(UTC), message=message[:300])
+        try:
+            await asyncio.to_thread(
+                self._workspaces.update_meta, stack.project, {"failure": failure}
+            )
+        except (OSError, ValueError, WorkspaceError):
+            logger.warning("Could not mark %s as a failed deployment", stack.project, exc_info=True)
 
     async def _report_unready_services(self, stack: StackHandle, ctx: StepContext) -> None:
         """Copy the last log lines of every service that did not become ready into the job,
@@ -669,7 +689,13 @@ class Orchestrator:
         if ctx is not None:
             ctx.emit(EventType.STEP_FAILED, f"[{ctx.index}/{ctx.total}] {ctx.step.label} failed")
         job.message = message
-        self._bus.publish(job.id, EventType.JOB_FAILED, message, retryable=job.retryable)
+        self._bus.publish(
+            job.id,
+            EventType.JOB_FAILED,
+            message,
+            retryable=job.retryable,
+            kept=True if job.kept else None,
+        )
 
     def _forget(self, job_id: UUID) -> None:
         self._jobs.pop(job_id, None)
@@ -1072,6 +1098,14 @@ class Orchestrator:
         expected = [service] if service is not None else services
         await self._start_watched(ctx, stack, expected, service=service)
         meta = await asyncio.to_thread(self._workspaces.read_meta, project)
+        if meta is not None and meta.failure is not None and service is None:
+            # Every service started: this is no longer a failed deployment.
+            try:
+                await asyncio.to_thread(self._workspaces.update_meta, project, {"failure": None})
+            except (OSError, ValueError, WorkspaceError):
+                logger.warning("Could not clear the failure mark of %s", project, exc_info=True)
+            else:
+                ctx.log("The failed deployment mark is cleared")
         if meta is not None and meta.urls:
             ctx.job.urls = list(meta.urls)
             ctx.job.url = meta.urls[0].url

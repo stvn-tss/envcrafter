@@ -153,6 +153,10 @@
         <input id="project-name" class="input" name="project_name" maxlength="32"
                autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="project-name-hint">
         <p id="project-name-hint" class="field-hint"></p>
+        <label class="check-field keep-field" for="keep-on-failure">
+          <input type="checkbox" id="keep-on-failure">
+          <span>If the deployment fails, keep it to debug it</span>
+        </label>
       </div>
       <div class="footer-actions">
         <button type="button" class="button" id="dialog-cancel">Close</button>
@@ -174,6 +178,10 @@
         <input id="plan-project-name" class="input" maxlength="32" autocomplete="off" spellcheck="false"
                autocapitalize="none" aria-describedby="plan-project-hint">
         <p id="plan-project-hint" class="field-hint"></p>
+        <label class="check-field keep-field" for="plan-keep-on-failure">
+          <input type="checkbox" id="plan-keep-on-failure">
+          <span>If the deployment fails, keep it to debug it</span>
+        </label>
       </div>
       <div class="footer-actions">
         <button type="button" class="button" id="plan-cancel">Cancel</button>

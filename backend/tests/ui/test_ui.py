@@ -6,7 +6,7 @@ import pytest
 from axe_playwright_python.sync_playwright import Axe
 from playwright.sync_api import Page, expect
 
-from app.engine.base import EngineError, HostResources
+from app.engine.base import EngineError, HostResources, LogSink, ServiceStatus, StackHandle
 from app.engine.simulated import SimulatedEngine
 from tests.conftest import FakeTranslator
 from tests.ui.conftest import LiveServer
@@ -143,6 +143,44 @@ def test_template_options_are_sent_with_the_deployment(page: Page, live_server: 
 
     assert request.value.post_data_json["parameters"] == {"SECURITY_LEVEL": "high"}
     expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+    assert errors == []
+
+
+def test_a_failed_deployment_can_be_kept_for_debugging(
+    page: Page, live_server: LiveServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken_start(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, *, service: str | None = None
+    ) -> None:
+        raise EngineError("`docker compose up` failed (exit code 1)")
+
+    async def all_exited(
+        self: SimulatedEngine, stacks: Sequence[StackHandle]
+    ) -> dict[str, list[ServiceStatus]]:
+        return {
+            stack.project: [ServiceStatus(service="juice-shop", state="exited", health=None)]
+            for stack in stacks
+        }
+
+    monkeypatch.setattr(SimulatedEngine, "start", broken_start)
+    monkeypatch.setattr(SimulatedEngine, "status", all_exited)
+    errors = open_home(page, live_server)
+    page.get_by_role("button", name="Details of OWASP Juice Shop").click()
+    page.locator("#project-name").fill("shop")
+    dialog = page.locator("#template-dialog")
+    dialog.get_by_label("If the deployment fails, keep it to debug it").check()
+
+    with page.expect_request("**/api/jobs") as request:
+        page.locator("#dialog-deploy").click()
+
+    assert request.value.post_data_json["keep_on_failure"] is True
+    expect(page.locator("#status-badge")).to_have_text("Failed", timeout=20_000)
+    result = page.locator("#job-result")
+    expect(result).to_contain_text("Kept for debugging")
+    expect(result.get_by_role("button", name="Remove environment")).to_be_visible()
+    row = page.locator(".environment", has=page.locator("code", has_text="shop"))
+    expect(row.locator(".status-badge")).to_have_text("Failed", timeout=15_000)
+    expect(row.locator(".environment-meta")).to_contain_text("kept for debugging")
     assert errors == []
 
 

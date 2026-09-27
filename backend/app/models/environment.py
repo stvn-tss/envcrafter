@@ -41,6 +41,13 @@ class EnvironmentService(StrictModel):
     image: Annotated[str, StringConstraints(min_length=1, max_length=512)]
 
 
+class DeploymentFailure(StrictModel):
+    """Why a deployment kept for debugging failed (keep_on_failure)."""
+
+    at: datetime
+    message: Annotated[str, StringConstraints(min_length=1, max_length=300)]
+
+
 class EnvironmentMeta(StrictModel):
     """`workspaces/<project>/meta.json`, written by the workspace step, then rewritten
     atomically when the user edits the title or the notes.
@@ -63,6 +70,8 @@ class EnvironmentMeta(StrictModel):
     notes: Annotated[str, StringConstraints(max_length=2000)] = ""
     # Template parameters chosen at deployment (name -> value), shown in the drawer.
     parameters: dict[SecretName, ParameterValue] = Field(default_factory=dict, max_length=8)
+    # Set when a failed deployment was kept for debugging, until a full start succeeds.
+    failure: DeploymentFailure | None = None
 
 
 class EnvironmentUpdate(StrictModel):
@@ -85,6 +94,7 @@ class EnvironmentState(StrEnum):
     DEGRADED = "degraded"  # some services run and some do not (or are unhealthy)
     STOPPED = "stopped"  # containers exist, none runs
     MISSING = "missing"  # no container at all
+    FAILED = "failed"  # a failed deployment kept for debugging: not every service runs
     UNKNOWN = "unknown"  # the engine could not be queried
 
 
@@ -117,6 +127,7 @@ class EnvironmentView(BaseModel):
     job: ActiveJobRef | None  # the job running on this environment, if any
     notes: str = ""  # written by the user
     parameters: dict[str, str] = Field(default_factory=dict)  # chosen at deployment
+    failure: DeploymentFailure | None = None  # a failed deployment kept for debugging
 
 
 class EnvironmentListResponse(BaseModel):
