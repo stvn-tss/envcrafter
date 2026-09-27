@@ -20,11 +20,11 @@ function duration(seconds) {
   return seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 }
 
-function line(text, warning = false) {
-  return el("li", { attrs: warning ? { "data-warning": "" } : {} }, [
-    icon(warning ? "alert" : "check"),
-    el("span", { text }),
-  ]);
+const LINE_ICONS = { ok: "check", warning: "alert", info: "info" };
+
+/** tone: "ok" (a fact in favour), "warning" (a shortage) or "info" (cannot tell). */
+function line(text, tone = "ok") {
+  return el("li", { attrs: { "data-tone": tone } }, [icon(LINE_ICONS[tone]), el("span", { text })]);
 }
 
 /** Lines of the capacity check, for the template dialog. */
@@ -50,15 +50,20 @@ export function readinessItems(readiness) {
       short
         ? `Needs about ${formatSize(memory)} of memory, only ${formatSize(available)} available: stop another environment first`
         : `Needs about ${formatSize(memory)} of memory` + (available !== null ? ` · ${formatSize(available)} available` : ""),
-      short,
+      short ? "warning" : "ok",
     ));
   }
   if (disk !== null) {
-    const where = readiness?.resources?.disk_is_virtual === true ? "in Docker Desktop's disk image" : "on Docker's disk";
-    items.push(line(
-      warnings.has("disk") ? `Only ${formatSize(disk)} free ${where}: this download may not fit` : `${formatSize(disk)} free ${where}`,
-      warnings.has("disk"),
-    ));
+    // Docker Desktop's disk image reports its own maximum, not what the host drive has left.
+    const virtual = readiness?.resources?.disk_is_virtual === true;
+    const where = virtual ? "in Docker Desktop's disk image" : "on Docker's disk";
+    if (warnings.has("disk")) {
+      items.push(line(`Only ${formatSize(disk)} free ${where}: this download may not fit`, "warning"));
+    } else if (virtual) {
+      items.push(line(`${formatSize(disk)} free ${where}: check the free space of the drive that holds it`, "info"));
+    } else {
+      items.push(line(`${formatSize(disk)} free ${where}`));
+    }
   }
   if (start !== null) {
     items.push(line(missing ? `Ready about ${duration(start)} after the download` : `Ready in about ${duration(start)}`));

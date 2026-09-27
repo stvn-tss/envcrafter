@@ -116,3 +116,24 @@ def test_read_host_resources(tmp_path: Path) -> None:
 @pytest.mark.parametrize("release", ["6.18.33.2-microsoft-standard-WSL2", "6.10.14-linuxkit"])
 def test_read_host_resources_flags_docker_desktop(tmp_path: Path, release: str) -> None:
     assert read_host_resources(tmp_path, tmp_path / "absent", release).disk_is_virtual is True
+
+
+def test_docker_desktop_disk_space_is_only_informative(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The disk image reports about 1 TB whatever the host drive has left: plenty of room
+    there proves nothing, so the check informs instead of saying ok."""
+
+    async def desktop(self: SimulatedEngine) -> HostResources:
+        return HostResources(
+            memory_total_mb=8192,
+            memory_available_mb=6144,
+            disk_free_mb=1_000_000,
+            disk_is_virtual=True,
+        )
+
+    monkeypatch.setattr(SimulatedEngine, "resources", desktop)
+    checks = {check["name"]: check for check in client.get("/api/system").json()["checks"]}
+
+    assert checks["disk"]["status"] == "info"
+    assert "drive that holds it" in checks["disk"]["detail"]

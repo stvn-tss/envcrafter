@@ -7,7 +7,13 @@ import math
 from collections.abc import Sequence
 
 from app.engine.base import HostResources, RuntimeCheck
-from app.models.system import ReadinessWarning, ResourcesView, SystemCheck, TemplateReadiness
+from app.models.system import (
+    CheckStatus,
+    ReadinessWarning,
+    ResourcesView,
+    SystemCheck,
+    TemplateReadiness,
+)
 from app.services.template_catalog import Template
 
 # Compressed layers take about this many times more room once extracted.
@@ -86,16 +92,19 @@ def system_checks(
             SystemCheck(name="disk", status="info", detail="Free disk space could not be measured.")
         )
     else:
-        where = (
-            "in Docker Desktop's disk image (the drive that holds it may have less)"
-            if resources.disk_is_virtual
-            else "on Docker's disk"
-        )
         low = disk < LOW_DISK_MB
-        detail = f"{size(disk)} free {where}" + (
-            ": some templates download more than 1 GB." if low else "."
-        )
-        checks.append(SystemCheck(name="disk", status="warning" if low else "ok", detail=detail))
+        shortage = ": some templates download more than 1 GB."
+        if resources.disk_is_virtual:
+            # Docker Desktop's disk image reports its own maximum, not what the host drive
+            # has left: plenty of room there proves nothing, only a shortage does.
+            detail = f"{size(disk)} free in Docker Desktop's disk image" + (
+                shortage if low else ": check the free space of the drive that holds it."
+            )
+            status: CheckStatus = "warning" if low else "info"
+        else:
+            detail = f"{size(disk)} free on Docker's disk" + (shortage if low else ".")
+            status = "warning" if low else "ok"
+        checks.append(SystemCheck(name="disk", status=status, detail=detail))
     checks.append(
         SystemCheck(name="llm", status="ok", detail="AI plans are on.")
         if llm_configured

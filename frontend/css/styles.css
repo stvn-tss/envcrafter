@@ -642,13 +642,13 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
   font-size: var(--text-md);
 }
 .check-list .icon, .readiness-list .icon { width: 16px; height: 16px; flex: none; align-self: center; }
-.check-list [data-status="ok"] .icon, .readiness-list li:not([data-warning]) .icon { color: var(--success); }
-.check-list [data-status="warning"] .icon, .readiness-list [data-warning] .icon { color: var(--warning); }
+.check-list [data-status="ok"] .icon, .readiness-list [data-tone="ok"] .icon { color: var(--success); }
+.check-list [data-status="warning"] .icon, .readiness-list [data-tone="warning"] .icon { color: var(--warning); }
 .check-list [data-status="error"] .icon { color: var(--danger); }
-.check-list [data-status="info"] .icon { color: var(--muted); }
+.check-list [data-status="info"] .icon, .readiness-list [data-tone="info"] .icon { color: var(--muted); }
 .check-list span { color: var(--text-2); }
 .readiness-list li { display: flex; align-items: flex-start; gap: 8px; font-size: var(--text-md); color: var(--text-2); }
-.readiness-list [data-warning] { color: var(--text); }
+.readiness-list [data-tone="warning"] { color: var(--text); }
 @media (max-width: 520px) {
   .check-list li { grid-template-columns: 16px minmax(0, 1fr); }
   .check-list li span { grid-column: 2; }

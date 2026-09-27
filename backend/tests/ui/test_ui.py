@@ -5,6 +5,8 @@ import pytest
 from axe_playwright_python.sync_playwright import Axe
 from playwright.sync_api import Page, expect
 
+from app.engine.base import HostResources
+from app.engine.simulated import SimulatedEngine
 from tests.conftest import FakeTranslator
 from tests.ui.conftest import LiveServer
 
@@ -273,4 +275,28 @@ def test_template_dialog_shows_what_the_deployment_needs(
 
     page.get_by_role("button", name="Details of Media Stack").click()
     expect(dialog).to_contain_text("All 5 images are already downloaded")
+    assert errors == []
+
+
+def test_docker_desktop_disk_space_is_flagged_before_deploying(
+    page: Page, live_server: LiveServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docker Desktop's disk image claims about 1 TB: the dialog must not present that
+    as room without saying the host drive may have less."""
+
+    async def desktop(self: SimulatedEngine) -> HostResources:
+        return HostResources(
+            memory_total_mb=8192,
+            memory_available_mb=6144,
+            disk_free_mb=1_000_000,
+            disk_is_virtual=True,
+        )
+
+    monkeypatch.setattr(SimulatedEngine, "resources", desktop)
+    errors = open_home(page, live_server)
+    page.get_by_role("button", name="Details of Media Stack").click()
+    disk = page.locator("#template-dialog .readiness-list li", has_text="disk image")
+
+    expect(disk).to_contain_text("check the free space of the drive that holds it")
+    expect(disk).to_have_attribute("data-tone", "info")
     assert errors == []
