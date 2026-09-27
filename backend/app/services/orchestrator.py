@@ -159,10 +159,12 @@ class Job:
     candidate: Candidate | None = None
     blueprint: StackBlueprint | None = None
     stack: StackHandle | None = None
-    # Cancellation (Orchestrator.cancel): requested by the user; `interruptible` while a
-    # step that may be interrupted runs; `finishing` once a failure or cancellation
-    # cleanup (the rollback) started.
+    # Cancellation (Orchestrator.cancel): requested by the user; `cancel_delivered` once
+    # cancel() cancelled the task itself; `interruptible` while a step that may be
+    # interrupted runs; `finishing` once a failure or cancellation cleanup (the rollback)
+    # started.
     cancel_requested: bool = False
+    cancel_delivered: bool = False
     interruptible: bool = False
     finishing: bool = False
     task: asyncio.Task[None] | None = field(default=None, repr=False)
@@ -297,6 +299,7 @@ class Orchestrator:
         job.cancel_requested = True
         logger.info("Job %s: cancellation requested", job.id)
         if job.interruptible and job.task is not None:
+            job.cancel_delivered = True
             job.task.cancel()
         return job
 
@@ -493,7 +496,9 @@ class Orchestrator:
                 raise _JobCancelled
         except asyncio.CancelledError:
             task = asyncio.current_task()
-            if not (job.cancel_requested and task is not None and task.cancelling() == 1):
+            # Ours only if cancel() delivered it and nobody else did: a shutdown that lands
+            # after a mere request (flag only, uninterruptible step) is still a shutdown.
+            if not (job.cancel_delivered and task is not None and task.cancelling() == 1):
                 job.status = JobStatus.FAILED
                 self._publish_failure(job, ctx, "Interrupted: the server is shutting down.")
                 raise

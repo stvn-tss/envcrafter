@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 import app.services.orchestrator as orchestrator_module
 from app.core.config import Settings
-from app.engine.base import LogSink, ProgressSink, StackHandle
+from app.engine.base import EngineError, LogSink, ProgressSink, StackHandle
 from app.engine.simulated import SimulatedEngine
 from app.translator.spec import StackSpec
 from app.workspace.manager import WorkspaceManager
@@ -175,3 +175,68 @@ def test_cancel_is_refused_when_it_cannot_apply(client: TestClient) -> None:
     )
     assert foreign.status_code == 403
     assert malformed.status_code == 422
+
+
+def test_a_cancel_during_the_failure_rollback_is_refused(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once a failed deployment rolls back, the outcome is decided: a late cancel is
+    refused and the job ends with one terminal event, the failure."""
+    rolling_back, release = threading.Event(), threading.Event()
+
+    async def broken_start(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, **kwargs: Any
+    ) -> None:
+        raise EngineError("`docker compose up` failed (exit code 1)")
+
+    async def slow_remove(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+        rolling_back.set()
+        await asyncio.to_thread(release.wait, 10)
+
+    monkeypatch.setattr(SimulatedEngine, "start", broken_start)
+    monkeypatch.setattr(SimulatedEngine, "remove", slow_remove)
+    job = client.post("/api/jobs", json=SHOP).json()
+    try:
+        assert rolling_back.wait(timeout=10)
+        response = _cancel(client, job)
+    finally:
+        release.set()
+    events = _events(client, job)
+
+    assert (response.status_code, response.json()["detail"]) == (
+        409,
+        "This job is already stopping.",
+    )
+    ends = {"job.succeeded", "job.failed", "job.cancelled"}
+    assert [event["type"] for event in events if event["type"] in ends] == ["job.failed"]
+    assert not (settings.workspaces_dir / "shop").exists()
+
+
+@pytest.mark.parametrize("cancel_first", [False, True], ids=["shutdown", "cancel-then-shutdown"])
+def test_a_server_shutdown_is_not_mistaken_for_a_user_cancel(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, cancel_first: bool
+) -> None:
+    """A shutdown interrupts the job: it ends as failed ("Interrupted"), even when the user
+    asked to cancel during a step that could not be interrupted yet."""
+    writing, release = threading.Event(), threading.Event()
+
+    async def slow_create(self: WorkspaceManager, *args: Any, **kwargs: Any) -> Any:
+        writing.set()
+        await asyncio.to_thread(release.wait, 10)
+        raise AssertionError("the shutdown should have stopped this step")
+
+    monkeypatch.setattr(WorkspaceManager, "create", slow_create)
+    job = client.post("/api/jobs", json=SHOP).json()
+    try:
+        assert writing.wait(timeout=10)
+        if cancel_first:
+            assert _cancel(client, job).status_code == 202
+        orchestrator = client.app.state.orchestrator
+        client.portal.call(orchestrator.shutdown)
+    finally:
+        release.set()
+    events = _events(client, job)
+
+    assert events[-1]["type"] == "job.failed"
+    assert events[-1]["message"] == "Interrupted: the server is shutting down."
+    assert "job.cancelled" not in [event["type"] for event in events]
