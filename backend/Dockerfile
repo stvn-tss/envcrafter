@@ -40,7 +40,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     ENVCRAFTER_TEMPLATES_DIR=/app/templates \
     ENVCRAFTER_FRONTEND_DIR=/app/frontend \
     ENVCRAFTER_WORKSPACES_DIR=/data/workspaces \
-    ENVCRAFTER_SETTINGS_FILE=/data/settings/settings.json
+    ENVCRAFTER_SETTINGS_FILE=/data/settings/settings.json \
+    ENVCRAFTER_HISTORY_FILE=/data/settings/history.sqlite3
 
 EXPOSE 8000
 # 0.0.0.0 inside the container only: the port is never published, Traefik

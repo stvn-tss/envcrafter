@@ -41,6 +41,7 @@ def _serve(
         allowed_hosts=["127.0.0.1"],
         workspaces_dir=tmp_path / "workspaces",
         settings_file=tmp_path / "data" / "settings.json",
+        history_file=tmp_path / "data" / "history.sqlite3",
         llm_api_key=TEST_API_KEY if translator is not None else None,
         inventory_cache_seconds=0,
         readiness_cache_seconds=0,

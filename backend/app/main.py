@@ -30,11 +30,12 @@ from app.engine.docker_compose import DockerComposeEngine
 from app.engine.simulated import SimulatedEngine
 from app.policy.images import ImageAllowlist
 from app.services.event_bus import JobEventBus
+from app.services.history import HistoryStore
 from app.services.inventory import EnvironmentInventory
 from app.services.llm_settings import LLMSettings, SettingsStore, TranslatorFactory
 from app.services.log_streams import LogStreamer
 from app.services.orchestrator import Orchestrator
-from app.services.plan_store import PlanStore
+from app.services.plan_store import PlanStore, restore_plan
 from app.services.readiness_probe import ReadinessProbe
 from app.services.template_catalog import TemplateCatalog
 from app.translator.client import LLMTranslator, Translator
@@ -111,6 +112,15 @@ def create_app(
         workspaces = WorkspaceManager(settings.workspaces_dir)
         engine = build_engine(settings)
         plans = PlanStore(ttl_seconds=settings.plan_ttl_seconds, max_plans=settings.max_plans)
+        history = HistoryStore(
+            settings.history_file, retention_days=settings.history_retention_days
+        )
+        await history.open()
+        # Plans still waiting for their review survive a restart of the server.
+        for body in await history.load_plans():
+            stored = restore_plan(body, catalog, allowlist)
+            if stored is not None:
+                plans.add(stored)
         orchestrator = Orchestrator(
             bus=bus,
             catalog=catalog,
@@ -120,6 +130,7 @@ def create_app(
             translator=None,  # installed by LLMSettings.load() from the active key
             settings=settings,
             plans=plans,
+            history=history,
         )
         llm_settings = LLMSettings(
             store=SettingsStore(settings.settings_file),
@@ -127,10 +138,12 @@ def create_app(
             model=settings.llm_model,
             factory=translator_factory or claude_translator,
             target=orchestrator,
+            history=history,
         )
         await llm_settings.load()
 
         app.state.settings = settings
+        app.state.history = history
         app.state.readiness = ReadinessProbe(
             engine=engine, cache_seconds=settings.readiness_cache_seconds
         )
@@ -151,6 +164,7 @@ def create_app(
             yield
         finally:
             await orchestrator.shutdown()
+            await history.close()
 
     app = FastAPI(
         title="EnvCrafter",

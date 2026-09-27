@@ -97,7 +97,9 @@ def test_saved_key_enables_ai_requests_and_survives_a_restart(
     if os.name == "posix":
         assert stat.S_IMODE(stored.stat().st_mode) == 0o600
         assert stat.S_IMODE(stored.parent.stat().st_mode) == 0o700
-    assert [path.name for path in stored.parent.iterdir()] == [stored.name]  # no temp file left
+    # No temp file left (the history database shares the directory, as in the control plane).
+    left = [path.name for path in stored.parent.iterdir() if not path.name.startswith("history.")]
+    assert left == [stored.name]
 
     restarted = make_client(translator_factory=_Keys())
     assert restarted.get("/api/settings").json()["llm"]["source"] == "settings"

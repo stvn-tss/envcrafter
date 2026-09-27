@@ -22,6 +22,7 @@ from typing import Literal, Protocol
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
 from app.models.settings import ApiKey, KeySource, LLMKeyStatus
+from app.services.history import HistoryStore
 from app.translator.client import Translator
 
 logger = logging.getLogger(__name__)
@@ -107,12 +108,14 @@ class LLMSettings:
         model: str,
         factory: TranslatorFactory,
         target: TranslatorTarget,
+        history: HistoryStore | None = None,
     ) -> None:
         self._store = store
         self._environment_key = environment_key
         self._model = model
         self._factory = factory
         self._target = target
+        self._history = history
         self._saved_key: SecretStr | None = None
         # Saving and removing are serialized: the file, the key in memory and the
         # translator in use always describe the same key.
@@ -143,7 +146,11 @@ class LLMSettings:
             self._saved_key = key
             self._target.set_translator(translator)
         logger.info("Claude API key saved from the settings")
-        return self.status()
+        status = self.status()
+        if self._history is not None:  # the hint only: never the key itself
+            message = f"Claude API key saved (ending {status.key_hint})"
+            await self._history.audit("settings", message)
+        return status
 
     async def remove_key(self) -> LLMKeyStatus:
         """Forget the saved key; the environment key, if any, takes over again."""
@@ -152,6 +159,8 @@ class LLMSettings:
             self._saved_key = None
             self._install()
         logger.info("Claude API key removed from the settings")
+        if self._history is not None:
+            await self._history.audit("settings", "Saved Claude API key removed")
         return self.status()
 
     @staticmethod

@@ -66,8 +66,9 @@ from app.models.template import is_valid_secret_name
 from app.policy.compose_policy import ComposePolicyError, PolicyContext, validate_compose
 from app.policy.images import ImageAllowlist, ImageRefError, parse_image_ref
 from app.services.event_bus import JobEventBus
+from app.services.history import HistoryStore, JobStart
 from app.services.log_streams import redact
-from app.services.plan_store import PlanStore, StoredPlan
+from app.services.plan_store import PlanStore, StoredPlan, plan_body
 from app.services.template_catalog import Template, TemplateCatalog
 from app.translator.client import Translator, TranslatorError
 from app.translator.spec import SpecConversionError, StackSpec, spec_to_compose_source
@@ -263,6 +264,7 @@ class Orchestrator:
         translator: Translator | None,
         settings: Settings,
         plans: PlanStore,
+        history: HistoryStore,
     ) -> None:
         self._bus = bus
         self._catalog = catalog
@@ -272,6 +274,7 @@ class Orchestrator:
         self._translator = translator
         self._settings = settings
         self._plans = plans
+        self._history = history
         self._jobs: dict[UUID, Job] = {}
         # The event loop keeps only *weak* references to tasks: without this set,
         # a running job could be garbage-collected mid-flight. It also lets
@@ -312,7 +315,7 @@ class Orchestrator:
         """Use another translator (a key saved or removed in Settings) for new jobs."""
         self._translator = translator
 
-    def cancel(self, job_id: UUID) -> Job:
+    async def cancel(self, job_id: UUID) -> Job:
         """Stop a deployment or an AI analysis. A step waiting on Docker or on the AI is
         interrupted at once; any other step finishes first. A deployment then rolls back
         like a failure, and the job ends with `job.cancelled`."""
@@ -330,6 +333,7 @@ class Orchestrator:
         if job.interruptible and job.task is not None:
             job.cancel_delivered = True
             job.task.cancel()
+        await self._history.audit("cancel", "Cancellation requested", project=job.project_name)
         return job
 
     async def submit(self, request: AnyDeploymentRequest) -> Job:
@@ -469,11 +473,16 @@ class Orchestrator:
                 raise UnknownEnvironmentError(project)
             changes = update.model_dump(exclude_none=True)
             try:
-                return await asyncio.to_thread(self._workspaces.update_meta, project, changes)
+                meta = await asyncio.to_thread(self._workspaces.update_meta, project, changes)
             except WorkspaceError:
                 raise UneditableEnvironmentError(project) from None
         finally:
             self._editing.discard(project)
+        if update.title is not None:
+            await self._history.audit("edit", f"Title changed to '{update.title}'", project=project)
+        if update.notes is not None:
+            await self._history.audit("edit", "Notes edited", project=project)
+        return meta
 
     async def shutdown(self) -> None:
         for task in self._tasks:
@@ -517,16 +526,25 @@ class Orchestrator:
 
     async def _run(self, job: Job, plan: Plan) -> None:
         job.status = JobStatus.RUNNING
-        # The full plan is announced first: the UI can show remaining steps from t=0.
-        self._bus.publish(
-            job.id,
-            EventType.JOB_ACCEPTED,
-            _accepted_message(job),
-            plan=[step for step, _ in plan],
-        )
-
+        accepted = _accepted_message(job)
         ctx: StepContext | None = None
         try:
+            # Recorded by the job task itself, before anything else: its end can never be
+            # written first.
+            await self._history.job_started(
+                JobStart(
+                    job_id=job.id,
+                    mode=job.mode,
+                    project=job.project_name,
+                    service=job.service,
+                    message=accepted,
+                    created_at=job.created_at,
+                )
+            )
+            # The full plan is announced first: the UI can show remaining steps from t=0.
+            self._bus.publish(
+                job.id, EventType.JOB_ACCEPTED, accepted, plan=[step for step, _ in plan]
+            )
             for index, (step, handler) in enumerate(plan, start=1):
                 if job.cancel_requested:
                     raise _JobCancelled
@@ -554,7 +572,7 @@ class Orchestrator:
             if not (job.cancel_delivered and task is not None and task.cancelling() == 1):
                 job.status = JobStatus.FAILED
                 job.retryable = True
-                self._publish_failure(job, ctx, "Interrupted: the server is shutting down.")
+                await self._publish_failure(job, ctx, "Interrupted: the server is shutting down.")
                 raise
             task.uncancel()  # our own cancel(): the job ends normally, as cancelled
             await self._finish_cancelled(job, ctx)
@@ -576,6 +594,7 @@ class Orchestrator:
         else:
             job.status = JobStatus.SUCCEEDED
             job.message = _success_message(job)
+            await self._record_end(job)
             self._bus.publish(
                 job.id,
                 EventType.JOB_SUCCEEDED,
@@ -610,7 +629,7 @@ class Orchestrator:
                     await self._rollback(job.stack, ctx)
         finally:
             job.status = JobStatus.FAILED
-        self._publish_failure(job, ctx, message)
+        await self._publish_failure(job, ctx, message)
 
     async def _finish_cancelled(self, job: Job, ctx: StepContext | None) -> None:
         """Roll a cancelled deployment back like a failed one, then end the job. The job
@@ -625,6 +644,7 @@ class Orchestrator:
             job.status = JobStatus.CANCELLED
         logger.info("Job %s cancelled", job.id)
         job.message = _cancelled_message(job, rolled_back)
+        await self._record_end(job)
         self._bus.publish(job.id, EventType.JOB_CANCELLED, job.message)
 
     async def _keep_failed(self, stack: StackHandle, ctx: StepContext, message: str) -> None:
@@ -685,10 +705,18 @@ class Orchestrator:
             return False
         return True
 
-    def _publish_failure(self, job: Job, ctx: StepContext | None, message: str) -> None:
+    async def _record_end(self, job: Job) -> None:
+        """Written before the terminal event: whoever reacts to that event (the drawer's
+        activity, a test) reads a history that already has the outcome."""
+        await self._history.job_finished(
+            job.id, status=job.status.value, message=job.message or "", retryable=job.retryable
+        )
+
+    async def _publish_failure(self, job: Job, ctx: StepContext | None, message: str) -> None:
         if ctx is not None:
             ctx.emit(EventType.STEP_FAILED, f"[{ctx.index}/{ctx.total}] {ctx.step.label} failed")
         job.message = message
+        await self._record_end(job)
         self._bus.publish(
             job.id,
             EventType.JOB_FAILED,
@@ -894,13 +922,14 @@ class Orchestrator:
             raise RuntimeError("plan step without a validated stack")
         created_at, expires_at = self._plans.window()
         view = self._plan_view(uuid4(), created_at, expires_at, ctx.job, blueprint)
-        self._plans.add(
-            StoredPlan(
-                view=view,
-                candidate=replace(candidate, source=copy.deepcopy(candidate.source)),
-                template=ctx.job.template,
-            )
+        stored = StoredPlan(
+            view=view,
+            candidate=replace(candidate, source=copy.deepcopy(candidate.source)),
+            template=ctx.job.template,
         )
+        self._plans.add(stored)
+        # Kept on disk too: a restart of the server within the review window keeps it.
+        await self._history.save_plan(view.plan_id, expires_at, plan_body(stored))
         ctx.job.plan_id = view.plan_id
         ctx.log(f"Plan kept for review until {expires_at:%H:%M} UTC")
 

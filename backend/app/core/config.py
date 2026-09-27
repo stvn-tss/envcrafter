@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     workspaces_dir: Path = REPO_ROOT / "workspaces"
     # Settings changed from the UI (the Claude API key). Git-ignored, owner-only permissions.
     settings_file: Path = REPO_ROOT / "data" / "settings.json"
+    # Job summaries, AI plans and the audit log (SQLite, owner-only), kept this many days.
+    history_file: Path = REPO_ROOT / "data" / "history.sqlite3"
+    history_retention_days: int = Field(default=90, ge=1)
 
     # Dev convenience: serve the static frontend from the API process (same origin).
     serve_frontend: bool = True

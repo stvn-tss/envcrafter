@@ -11,6 +11,7 @@ from starlette.requests import HTTPConnection
 
 from app.core.config import Settings
 from app.services.event_bus import JobEventBus
+from app.services.history import HistoryStore
 from app.services.inventory import EnvironmentInventory
 from app.services.llm_settings import LLMSettings
 from app.services.log_streams import LogStreamer
@@ -54,6 +55,11 @@ def get_readiness(conn: HTTPConnection) -> ReadinessProbe:
     return readiness
 
 
+def get_history(conn: HTTPConnection) -> HistoryStore:
+    history: HistoryStore = conn.app.state.history
+    return history
+
+
 def get_llm_settings(conn: HTTPConnection) -> LLMSettings:
     llm: LLMSettings = conn.app.state.llm_settings
     return llm
@@ -67,3 +73,4 @@ InventoryDep = Annotated[EnvironmentInventory, Depends(get_inventory)]
 LogStreamerDep = Annotated[LogStreamer, Depends(get_log_streamer)]
 LLMSettingsDep = Annotated[LLMSettings, Depends(get_llm_settings)]
 ReadinessDep = Annotated[ReadinessProbe, Depends(get_readiness)]
+HistoryDep = Annotated[HistoryStore, Depends(get_history)]

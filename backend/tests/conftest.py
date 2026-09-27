@@ -30,6 +30,7 @@ def settings(tmp_path: Path) -> Settings:
         allowed_hosts=["testserver"],
         workspaces_dir=tmp_path / "workspaces",
         settings_file=tmp_path / "data" / "settings.json",
+        history_file=tmp_path / "data" / "history.sqlite3",
         llm_api_key=None,
         inventory_cache_seconds=0,
         readiness_cache_seconds=0,

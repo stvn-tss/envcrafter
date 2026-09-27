@@ -4,12 +4,13 @@ and the settings changed from the UI."""
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response, status
 from pydantic import SecretStr
 
 from app import __version__
 from app.api.deps import (
     CatalogDep,
+    HistoryDep,
     InventoryDep,
     LLMSettingsDep,
     OrchestratorDep,
@@ -27,6 +28,7 @@ from app.models.deployment import (
     PlanRequest,
 )
 from app.models.environment import EnvironmentListResponse, EnvironmentUpdate, EnvironmentView
+from app.models.history import ActivityResponse
 from app.models.plan import PlanView
 from app.models.settings import LLMKeyRequest, SettingsView
 from app.models.system import SystemView, TemplateReadiness
@@ -205,7 +207,7 @@ async def cancel_job(job_id: UUID, orchestrator: OrchestratorDep) -> JobSummary:
     """Stop a running deployment or AI analysis. A deployment is rolled back; the job then
     ends with a `job.cancelled` event on `events_url`."""
     try:
-        job = orchestrator.cancel(job_id)
+        job = await orchestrator.cancel(job_id)
     except UnknownJobError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown job") from None
     except JobNotCancellableError as exc:
@@ -249,6 +251,21 @@ async def get_environment(
     if view is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")
     return view
+
+
+@router.get("/environments/{project}/activity")
+async def get_environment_activity(
+    project: Annotated[str, Path(pattern=PROJECT_NAME_PATTERN)],
+    inventory: InventoryDep,
+    history: HistoryDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> ActivityResponse:
+    """Jobs and edits of this environment since its latest deployment, newest first."""
+    view = await inventory.get(project)
+    if view is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")
+    entries = await history.activity(project, created_at=view.created_at, limit=limit)
+    return ActivityResponse(available=entries is not None, entries=entries or [])
 
 
 @router.patch("/environments/{project}", dependencies=[Depends(require_trusted_json_request)])
