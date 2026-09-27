@@ -7,11 +7,11 @@
 import { appIcon, categoryTag, footprintItems, isVulnerable } from "./catalog.js";
 import { componentsTable, networkSummary, section, volumesList, vulnerableCallout } from "./dialog-parts.js";
 import { el } from "./dom.js";
-import { autoProjectName, projectNameProblem, webUrl } from "./environment.js";
+import { nextProjectName, projectNameProblem, webUrl } from "./environment.js";
 import { icon } from "./icons.js";
 import { readinessItems } from "./readiness.js";
 
-const NAME_HINT = "3–32 lowercase letters, digits or hyphens. Leave empty for a random name.";
+const NAME_HINT = "3–32 lowercase letters, digits or hyphens. Leave empty to use the name shown.";
 
 export class TemplateDetails {
   #template = null;
@@ -22,10 +22,11 @@ export class TemplateDetails {
   /**
    * @param {{ onDeploy: (template: object, projectName: string | null) => Promise<string | null>,
    *           categoryLabel: (id: string) => string,
-   *           fetchReadiness: (templateId: string) => Promise<object> }} options
+   *           fetchReadiness: (templateId: string) => Promise<object>,
+   *           takenNames: () => Set<string> }} options
    *   onDeploy resolves with an error message
    */
-  constructor(dialog, { onDeploy, categoryLabel, fetchReadiness }) {
+  constructor(dialog, { onDeploy, categoryLabel, fetchReadiness, takenNames }) {
     this.dialog = dialog;
     this.heading = dialog.querySelector("#dialog-heading");
     this.body = dialog.querySelector("#dialog-body");
@@ -36,6 +37,7 @@ export class TemplateDetails {
     this.onDeploy = onDeploy;
     this.categoryLabel = categoryLabel;
     this.fetchReadiness = fetchReadiness;
+    this.takenNames = takenNames;
 
     const close = () => dialog.close();
     dialog.querySelector("#dialog-close").addEventListener("click", close);
@@ -54,7 +56,7 @@ export class TemplateDetails {
   open(template) {
     this.#template = template;
     this.nameInput.value = "";
-    this.nameInput.placeholder = autoProjectName(template.id);
+    this.nameInput.placeholder = nextProjectName(template.id, this.takenNames());
     this.#hideError();
     this.deployButton.disabled = false;
 
@@ -120,7 +122,7 @@ export class TemplateDetails {
   }
 
   #renderAccess(chosenName) {
-    const project = chosenName ?? autoProjectName(this.#template.id);
+    const project = chosenName ?? this.nameInput.placeholder;
     const exposed = this.#template.components.filter((component) => component.web_access);
     const children = [
       el(
@@ -137,7 +139,7 @@ export class TemplateDetails {
     if (!chosenName) {
       children.push(el("p", {
         className: "hint access-note",
-        text: "“xxxx” is a random suffix. Set a project name below to choose the address.",
+        text: "The next free name. Set a project name below to choose another address.",
       }));
     }
     this.#accessSection.replaceChildren(...children);

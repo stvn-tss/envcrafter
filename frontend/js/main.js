@@ -96,6 +96,7 @@ const details = new TemplateDetails(document.querySelector("#template-dialog"), 
   onDeploy: (template, projectName) => deployTemplate(template, projectName),
   categoryLabel,
   fetchReadiness,
+  takenNames: () => takenNames(),
 });
 const catalog = new Catalog(document.querySelector("#catalog"), {
   onDetails: (template) => details.open(template),
@@ -116,6 +117,7 @@ const promptForm = new PromptForm(document.querySelector("#prompt-form"), {
   onOpenTemplate: (template) => details.open(template),
 });
 const planReview = new PlanReview(document.querySelector("#plan-dialog"), {
+  takenNames: () => takenNames(),
   onDeploy: (plan, projectName) => {
     const payload = withTimezone({ mode: "plan", plan_id: plan.plan_id });
     if (projectName) payload.project_name = projectName;
@@ -127,6 +129,11 @@ notifyOffer.addEventListener("click", async () => {
   await enableNotifications();
   refreshNotifyOffer();
 });
+
+/** Projects on the dashboard: an unnamed deployment gets the first free <template>-<n>. */
+function takenNames() {
+  return new Set(environments.environments.map((environment) => environment.project));
+}
 
 function withTimezone(payload) {
   if (TIMEZONE) payload.timezone = TIMEZONE;

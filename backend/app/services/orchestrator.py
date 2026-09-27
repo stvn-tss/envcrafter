@@ -31,7 +31,6 @@ restart never deletes an environment.
 import asyncio
 import copy
 import logging
-import secrets
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -91,6 +90,8 @@ _FAILURE_LOG_SERVICES = 3
 _FAILURE_LOG_LINES = 30
 _FAILURE_LOG_LINE_LENGTH = 300
 _FAILURE_LOG_TIMEOUT_SECONDS = 30
+# Unnamed deployments are called <template>-1 ... <template>-999.
+_MAX_NAME_NUMBER = 999
 
 
 def job_events_url(job_id: UUID) -> str:
@@ -333,18 +334,20 @@ class Orchestrator:
         elif self._translator is None:
             raise TranslatorUnavailableError
 
-        project = request.project_name or self._generate_project_name(template)
         job = Job(
             id=uuid4(),
             mode=request.mode,
-            project_name=project,
+            project_name=request.project_name,
             request=request,
             template=template,
             prompt=request.prompt if isinstance(request, PromptDeploymentRequest) else None,
             plan_id=stored.view.plan_id if stored is not None else None,
             translator=self._translator if isinstance(request, PromptDeploymentRequest) else None,
         )
-        await self._reserve(job, must_exist=False)
+        if request.project_name is not None:
+            await self._reserve(job, must_exist=False)
+        else:
+            await self._reserve_new_name(job, _name_prefix(template))
 
         first_step: tuple[PlanStep, StepHandler]
         if isinstance(request, TemplateDeploymentRequest):
@@ -633,11 +636,23 @@ class Orchestrator:
         self._jobs.pop(job_id, None)
         self._bus.discard_channel(job_id)
 
-    @staticmethod
-    def _generate_project_name(template: Template | None) -> str:
-        # Random suffix: several instances of the same template can coexist.
-        prefix = template.manifest.id[:24].rstrip("-") if template else "env"
-        return f"{prefix}-{secrets.token_hex(2)}"
+    async def _reserve_new_name(self, job: Job, prefix: str) -> None:
+        """Name a deployment that has none: the first free `<prefix>-<n>` (glpi-1, glpi-2...),
+        short and easy to type. A number held by an active job or a stray directory is
+        skipped."""
+        taken = set(await asyncio.to_thread(self._workspaces.list_projects))
+        for number in range(1, _MAX_NAME_NUMBER + 1):
+            name = f"{prefix}-{number}"
+            if name in taken:
+                continue
+            job.project_name = name
+            try:
+                await self._reserve(job, must_exist=False)
+            except ProjectNameConflictError:
+                continue
+            return
+        job.project_name = None
+        raise ProjectNameConflictError(prefix)
 
     def _image_title(self, image: str) -> str:
         """Allow-list title of an image ("MariaDB 11.4 LTS"), or the reference itself."""
@@ -1013,6 +1028,11 @@ class Orchestrator:
         if ctx.job.stack is None:
             raise RuntimeError("engine step without a workspace")
         return ctx.job.stack
+
+
+def _name_prefix(template: Template | None) -> str:
+    """The template id, cut so that `-<n>` still fits the 32 characters of a project name."""
+    return template.manifest.id[:24].rstrip("-") if template is not None else "env"
 
 
 def is_ready(status: ServiceStatus) -> bool:

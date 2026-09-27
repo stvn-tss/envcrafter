@@ -112,6 +112,24 @@ def test_api_key_saved_from_settings_turns_ai_plans_on(page: Page, live_server: 
     assert [error for error in errors if "400 (Bad Request)" not in error] == []
 
 
+def test_the_dialog_announces_the_next_free_name(page: Page, live_server: LiveServer) -> None:
+    errors = open_home(page, live_server)
+    page.get_by_role("button", name="Details of OWASP Juice Shop").click()
+    expect(page.locator("#project-name")).to_have_attribute("placeholder", "owasp-juice-shop-1")
+    expect(page.locator("#template-dialog .access-list")).to_contain_text(
+        "http://owasp-juice-shop-1.localhost"
+    )
+    page.locator("#dialog-deploy").click()
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+    expect(page.locator(".environment-title code", has_text="owasp-juice-shop-1")).to_be_visible(
+        timeout=15_000
+    )
+
+    page.get_by_role("button", name="Details of OWASP Juice Shop").click()
+    expect(page.locator("#project-name")).to_have_attribute("placeholder", "owasp-juice-shop-2")
+    assert errors == []
+
+
 def test_theme_can_be_pinned_in_settings(page: Page, live_server: LiveServer) -> None:
     page.emulate_media(color_scheme="light")
     open_home(page, live_server)

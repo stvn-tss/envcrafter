@@ -37,9 +37,14 @@ export function projectNameProblem(name) {
   return "End with a letter or a digit.";
 }
 
-/** Shape of the name the server picks when none is given: <template id>-<4 hex digits>. */
-export function autoProjectName(templateId) {
-  return `${templateId.slice(0, 24).replace(/-+$/, "")}-xxxx`;
+/** The name the server gives a deployment without one: the first free <prefix>-<n>. */
+export function nextProjectName(prefix, taken = new Set()) {
+  const base = prefix.slice(0, 24).replace(/-+$/, "");
+  for (let number = 1; number < 1000; number += 1) {
+    const name = `${base}-${number}`;
+    if (!taken.has(name)) return name;
+  }
+  return `${base}-1`;
 }
 
 export function withProject(text, project) {

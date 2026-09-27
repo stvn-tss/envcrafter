@@ -5,17 +5,20 @@
  */
 import { componentsTable, networkSummary, section, volumesList, vulnerableCallout } from "./dialog-parts.js";
 import { el } from "./dom.js";
-import { projectNameProblem, webUrl } from "./environment.js";
+import { nextProjectName, projectNameProblem, webUrl } from "./environment.js";
 import { icon } from "./icons.js";
 
-const NAME_HINT = "3–32 lowercase letters, digits or hyphens. Leave empty for a random name.";
+const NAME_HINT = "3–32 lowercase letters, digits or hyphens. Leave empty to use the name shown.";
 
 export class PlanReview {
   #plan = null;
   #access = null;
 
-  /** @param {{ onDeploy: (plan: object, projectName: string | null) => Promise<string | null> }} options */
-  constructor(dialog, { onDeploy }) {
+  /**
+   * @param {{ onDeploy: (plan: object, projectName: string | null) => Promise<string | null>,
+   *           takenNames: () => Set<string> }} options
+   */
+  constructor(dialog, { onDeploy, takenNames }) {
     this.dialog = dialog;
     this.heading = dialog.querySelector("#plan-heading");
     this.body = dialog.querySelector("#plan-body");
@@ -24,6 +27,7 @@ export class PlanReview {
     this.error = dialog.querySelector("#plan-error");
     this.deployButton = dialog.querySelector("#plan-deploy");
     this.onDeploy = onDeploy;
+    this.takenNames = takenNames;
     const close = () => dialog.close();
     dialog.querySelector("#plan-close").addEventListener("click", close);
     dialog.querySelector("#plan-cancel").addEventListener("click", close);
@@ -58,7 +62,7 @@ export class PlanReview {
       el("p", { className: "hint", text: Number.isNaN(expires.getTime()) ? "" : `This plan stays available until ${expires.toLocaleTimeString()}.` }),
     );
     this.nameInput.value = "";
-    this.nameInput.placeholder = plan.template_id ? `${plan.template_id.slice(0, 24).replace(/-+$/, "")}-xxxx` : "env-xxxx";
+    this.nameInput.placeholder = nextProjectName(plan.template_id ?? "env", this.takenNames());
     this.#hideError();
     this.#refreshName();
     this.dialog.showModal();
