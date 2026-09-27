@@ -1,10 +1,12 @@
 """Durable history in SQLite: job summaries, reviewable AI plans and an audit log."""
 
 import asyncio
+import json
 import os
 import sqlite3
 import stat
 import threading
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ from app.engine.base import LogSink, ProgressSink, StackHandle
 from app.engine.simulated import SimulatedEngine
 from app.main import create_app
 from app.services.history import HistoryStore, JobStart
+from app.translator.spec import StackSpec
 from tests.conftest import (
     TEST_API_KEY,
     ClientFactory,
@@ -100,6 +103,13 @@ def test_activity_needs_an_existing_environment(client: TestClient) -> None:
     assert client.get("/api/environments/Bad_Name/activity").status_code == 422
 
 
+def test_activity_reads_a_bounded_number_of_entries(client: TestClient) -> None:
+    run_job(client, LAB)
+    assert client.get("/api/environments/lab/activity?limit=200").status_code == 200
+    assert client.get("/api/environments/lab/activity?limit=0").status_code == 422
+    assert client.get("/api/environments/lab/activity?limit=201").status_code == 422
+
+
 def test_plans_survive_a_restart(settings: Settings) -> None:
     translator = FakeTranslator(spec(decision="template", template_id="owasp-juice-shop"))
     keyed = settings.model_copy(update={"llm_api_key": TEST_API_KEY})
@@ -152,6 +162,69 @@ def test_a_plan_with_many_secrets_is_kept_across_a_restart(settings: Settings) -
         plan = second.get(f"/api/plans/{done['plan_id']}")
         assert plan.status_code == 200, plan.text
         assert plan.json()["secrets"] == 17
+
+
+def _plan_on_disk(settings: Settings, answer: StackSpec) -> tuple[Settings, str]:
+    """Plan with a first server, then stop it: the plan is left in the database only."""
+    keyed = settings.model_copy(update={"llm_api_key": TEST_API_KEY})
+    translator = FakeTranslator(answer)
+    with TestClient(create_app(keyed, lambda key: translator)) as first:
+        planning = first.post("/api/plans", json={"prompt": "books"}, headers=ORIGIN)
+        done = _finish(first, planning.json())[-1]
+        assert done["type"] == "job.succeeded", done["message"]
+    return keyed, done["plan_id"]
+
+
+def _rewrite_stored_plan(settings: Settings, plan_id: str, body: str) -> None:
+    with closing(sqlite3.connect(settings.history_file)) as db, db:
+        db.execute("UPDATE plans SET body = ? WHERE plan_id = ?", (body, plan_id))
+
+
+def _stored_plan(settings: Settings, plan_id: str) -> dict[str, Any]:
+    with closing(sqlite3.connect(settings.history_file)) as db:
+        (body,) = db.execute("SELECT body FROM plans WHERE plan_id = ?", (plan_id,)).fetchone()
+    record: dict[str, Any] = json.loads(body)
+    return record
+
+
+def test_a_tampered_stored_plan_is_refused_at_deployment(settings: Settings) -> None:
+    """The database is not trusted more than a request: a restored stack goes through the
+    security policy again before anything is created."""
+    keyed, plan_id = _plan_on_disk(settings, BOOKS)
+    record = _stored_plan(keyed, plan_id)
+    record["candidate"]["source"]["services"]["books"]["privileged"] = True
+    _rewrite_stored_plan(keyed, plan_id, json.dumps(record))
+
+    with TestClient(create_app(keyed, lambda key: FakeTranslator(BOOKS))) as client:
+        job = client.post("/api/jobs", json={"mode": "plan", "plan_id": plan_id}, headers=ORIGIN)
+        assert job.status_code == 202, job.text
+        events = _finish(client, job.json())
+        assert events[-1]["type"] == "job.failed"
+        assert events[-1]["message"] == "The stack was rejected by the security policy."
+        assert any("privileged" in event["message"] for event in events)
+        assert client.get("/api/environments").json()["environments"] == []
+
+
+def test_an_unreadable_stored_plan_is_ignored_at_startup(settings: Settings) -> None:
+    keyed, plan_id = _plan_on_disk(settings, BOOKS)
+    _rewrite_stored_plan(keyed, plan_id, '{"view": "not a plan"}')
+
+    with TestClient(create_app(keyed, lambda key: FakeTranslator(BOOKS))) as client:
+        assert client.get(f"/api/plans/{plan_id}").status_code == 404
+        deploy = client.post("/api/jobs", json={"mode": "plan", "plan_id": plan_id}, headers=ORIGIN)
+        assert deploy.status_code == 404
+
+
+def test_a_stored_plan_whose_template_left_the_catalog_is_dropped(settings: Settings) -> None:
+    keyed, plan_id = _plan_on_disk(
+        settings, spec(decision="template", template_id="owasp-juice-shop")
+    )
+    record = _stored_plan(keyed, plan_id)
+    record["template_id"] = "retired-shop"
+    _rewrite_stored_plan(keyed, plan_id, json.dumps(record))
+
+    with TestClient(create_app(keyed, lambda key: FakeTranslator(BOOKS))) as client:
+        assert client.get(f"/api/plans/{plan_id}").status_code == 404
 
 
 def test_a_plan_the_history_cannot_keep_still_reaches_review(

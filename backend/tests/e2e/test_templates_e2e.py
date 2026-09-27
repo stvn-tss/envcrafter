@@ -199,6 +199,15 @@ def test_template_deploys_serves_and_is_removed(template: dict[str, Any]) -> Non
             assert environment["state"] in {"running", "starting"}, environment
             assert _first_log_frame(project, events[-1]["urls"][0]["service"])["type"] == "line"
 
+            # CPU and memory, read through the API's socket proxy (docker ps + docker stats).
+            usage = api.get(f"/api/environments/{project}/usage").json()
+            assert usage["available"] is True, usage
+            measured = {item["service"]: item for item in usage["services"]}
+            assert measured, usage
+            assert set(measured) <= {c["service"] for c in template["components"]}, usage
+            for item in measured.values():
+                assert item["cpu_percent"] is not None and item["memory_mb"] is not None, usage
+
             # Footprint check: warn (never fail) when the manifest underestimates.
             footprint = template["footprint"]
             first_start = _step_seconds(events, "container_deploy")
