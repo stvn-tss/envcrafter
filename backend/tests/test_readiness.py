@@ -5,10 +5,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
 from app.engine.base import HostResources, RuntimeCheck
 from app.engine.host import read_host_resources
 from app.engine.simulated import SimulatedEngine
-from tests.conftest import run_job
+from tests.conftest import ClientFactory, run_job
 
 MEDIA = {"mode": "template", "template_id": "media-stack", "project_name": "media"}
 
@@ -137,3 +138,34 @@ def test_docker_desktop_disk_space_is_only_informative(
 
     assert checks["disk"]["status"] == "info"
     assert "drive that holds it" in checks["disk"]["detail"]
+
+
+def test_readiness_reads_docker_once_per_interval(
+    make_client: ClientFactory, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any web page can send GET requests to the local API, and each reading starts docker
+    processes: within the cache window, repeated requests reuse one reading."""
+    settings.readiness_cache_seconds = 60
+    inspected: list[int] = []
+    diagnosed: list[int] = []
+    missing_images, diagnose = SimulatedEngine.missing_images, SimulatedEngine.diagnose
+
+    async def counting_missing(self: SimulatedEngine, images: list[str]) -> list[str]:
+        inspected.append(len(images))
+        return await missing_images(self, images)
+
+    async def counting_diagnose(self: SimulatedEngine) -> list[RuntimeCheck]:
+        diagnosed.append(1)
+        return await diagnose(self)
+
+    monkeypatch.setattr(SimulatedEngine, "missing_images", counting_missing)
+    monkeypatch.setattr(SimulatedEngine, "diagnose", counting_diagnose)
+    client = make_client()
+
+    for _ in range(3):
+        assert client.get("/api/templates/media-stack/readiness").status_code == 200
+        assert client.get("/api/templates/glpi/readiness").status_code == 200
+        assert client.get("/api/system").status_code == 200
+
+    assert inspected == [5, 2]  # one reading per template
+    assert diagnosed == [1]

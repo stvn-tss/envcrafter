@@ -43,6 +43,7 @@ def _serve(
         settings_file=tmp_path / "data" / "settings.json",
         llm_api_key=TEST_API_KEY if translator is not None else None,
         inventory_cache_seconds=0,
+        readiness_cache_seconds=0,
         health_poll_seconds=0.2,
     )
     # Any key saved from the Settings dialog is accepted, unless it contains "rejected".

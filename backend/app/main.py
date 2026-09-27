@@ -35,6 +35,7 @@ from app.services.llm_settings import LLMSettings, SettingsStore, TranslatorFact
 from app.services.log_streams import LogStreamer
 from app.services.orchestrator import Orchestrator
 from app.services.plan_store import PlanStore
+from app.services.readiness_probe import ReadinessProbe
 from app.services.template_catalog import TemplateCatalog
 from app.translator.client import LLMTranslator, Translator
 from app.workspace.manager import WorkspaceManager
@@ -130,7 +131,9 @@ def create_app(
         await llm_settings.load()
 
         app.state.settings = settings
-        app.state.engine = engine
+        app.state.readiness = ReadinessProbe(
+            engine=engine, cache_seconds=settings.readiness_cache_seconds
+        )
         app.state.catalog = catalog
         app.state.event_bus = bus
         app.state.orchestrator = orchestrator

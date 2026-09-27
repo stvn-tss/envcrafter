@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     max_plans: int = Field(default=32, ge=1)
     # One `docker ps` serves every dashboard poll during this window (0: no cache).
     inventory_cache_seconds: float = Field(default=2.0, ge=0)
+    # One Docker reading serves the readiness endpoints during this window (0: no cache).
+    readiness_cache_seconds: float = Field(default=2.0, ge=0)
     # Health watcher period while `up --wait` runs, and step.progress throttle.
     health_poll_seconds: float = Field(default=5.0, gt=0)
     progress_interval_seconds: float = Field(default=0.5, gt=0)

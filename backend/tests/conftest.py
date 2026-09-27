@@ -32,6 +32,7 @@ def settings(tmp_path: Path) -> Settings:
         settings_file=tmp_path / "data" / "settings.json",
         llm_api_key=None,
         inventory_cache_seconds=0,
+        readiness_cache_seconds=0,
     )
 
 

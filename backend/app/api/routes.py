@@ -1,7 +1,6 @@
 """REST endpoints: health, template catalog, deployment jobs, the environment inventory
 and the settings changed from the UI."""
 
-import asyncio
 from typing import Annotated
 from uuid import UUID
 
@@ -11,10 +10,10 @@ from pydantic import SecretStr
 from app import __version__
 from app.api.deps import (
     CatalogDep,
-    EngineDep,
     InventoryDep,
     LLMSettingsDep,
     OrchestratorDep,
+    ReadinessDep,
     SettingsDep,
 )
 from app.core.security import require_trusted_json_request, require_trusted_origin
@@ -130,22 +129,20 @@ async def template_logo(
 async def get_template_readiness(
     template_id: Annotated[str, Path(pattern=TEMPLATE_ID_PATTERN)],
     catalog: CatalogDep,
-    engine: EngineDep,
+    readiness: ReadinessDep,
 ) -> TemplateReadiness:
     """What deploying this template needs on this machine: downloads left, memory, disk."""
     template = catalog.get(template_id)
     if template is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown template")
-    missing, resources = await asyncio.gather(
-        engine.missing_images(template_images(template)), engine.resources()
-    )
-    return template_readiness(template, len(missing), resources)
+    missing, resources = await readiness.template(template.manifest.id, template_images(template))
+    return template_readiness(template, missing, resources)
 
 
 @router.get("/system")
-async def get_system(engine: EngineDep, llm: LLMSettingsDep) -> SystemView:
+async def get_system(readiness: ReadinessDep, llm: LLMSettingsDep) -> SystemView:
     """First-run checklist: Docker, the reverse proxy, free memory and disk, the AI key."""
-    runtime, resources = await asyncio.gather(engine.diagnose(), engine.resources())
+    runtime, resources = await readiness.system()
     return SystemView(
         checks=system_checks(runtime, resources, llm.status().configured),
         resources=resources_view(resources),

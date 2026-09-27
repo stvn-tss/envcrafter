@@ -212,6 +212,7 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_PLAN_TTL_SECONDS` | `900` | How long a reviewed AI plan can still be deployed. |
 | `ENVCRAFTER_MAX_PLANS` | `32` | Plans kept in memory at once (oldest evicted first). |
 | `ENVCRAFTER_INVENTORY_CACHE_SECONDS` | `2` | How long a `docker ps` result is reused across dashboard polls. |
+| `ENVCRAFTER_READINESS_CACHE_SECONDS` | `2` | How long one Docker reading serves the setup check and the capacity check before deploying. |
 | `ENVCRAFTER_HEALTH_POLL_SECONDS` | `5` | Health-watcher poll period during startup. |
 | `ENVCRAFTER_PROGRESS_INTERVAL_SECONDS` | `0.5` | Minimum interval between `step.progress` events. |
 | `ENVCRAFTER_LOG_TAIL_MAX` | `1000` | Largest `tail` accepted on the logs WebSocket. |
