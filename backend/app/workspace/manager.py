@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,24 @@ class WorkspaceManager:
             # The environment is still listed from Docker; details stay server-side.
             logger.warning("Ignoring unreadable %s of %s", META_FILE, project, exc_info=True)
             return None
+
+    def update_meta(self, project: str, changes: Mapping[str, object]) -> EnvironmentMeta:
+        """Blocking. Rewrite meta.json with `changes` applied, atomically: readers see the
+        old file or the new one, never a partial write. Raises WorkspaceError when the
+        workspace has no readable meta.json."""
+        meta = self.read_meta(project)
+        if meta is None:
+            raise WorkspaceError("this environment has no readable meta.json")
+        updated = EnvironmentMeta.model_validate({**meta.model_dump(), **changes})
+        path = self._path_for(project)
+        temporary = path / f".{META_FILE}.{secrets.token_hex(4)}.tmp"
+        _write_private(temporary, updated.model_dump_json(indent=2) + "\n")
+        try:
+            os.replace(temporary, path / META_FILE)
+        except OSError:
+            temporary.unlink(missing_ok=True)
+            raise
+        return updated
 
     def read_secret_values(self, project: str) -> list[str]:
         """Blocking. Generated secret values of a project, only to redact them from logs.

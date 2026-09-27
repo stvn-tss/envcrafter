@@ -65,6 +65,17 @@ export async function removeEnvironment(project) {
   return response.json();
 }
 
+/** Changes the title or the notes of an environment; resolves with its updated view. */
+export async function updateEnvironment(project, changes) {
+  const response = await fetch(`/api/environments/${encodeURIComponent(project)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(changes),
+  });
+  if (!response.ok) throw new ApiError(await readError(response));
+  return response.json();
+}
+
 /** Stop, start or restart an environment. Resolves with the job summary (HTTP 202). */
 export async function runEnvironmentAction(project, action, service = null) {
   const response = await fetch(`/api/environments/${encodeURIComponent(project)}/actions`, {

@@ -19,42 +19,24 @@ from pydantic import (
 )
 
 from app.core.timezones import TIMEZONE_PATTERN
-from app.models.common import JobMode, ProjectName, StrictModel, TemplateId
+from app.models.common import (
+    JobMode,
+    ProjectName,
+    StrictModel,
+    TemplateId,
+    reject_invisible_characters,
+)
 from app.models.environment import WebEndpoint
 from app.models.template import ServiceName
 
 # --- Requests -----------------------------------------------------------------
-
-# C0 control characters (except tab, LF and CR), DEL, and Unicode bidirectional
-# embeddings/overrides/isolates (U+202A-U+202E, U+2066-U+2069). Controls can
-# corrupt logs and terminals; bidi characters can make text render differently
-# from what is actually sent to the LLM ("Trojan Source"). Declared as code
-# points so the source file itself never contains invisible characters.
-_FORBIDDEN_CODEPOINTS = frozenset(
-    [
-        *range(0x00, 0x09),
-        0x0B,
-        0x0C,
-        *range(0x0E, 0x20),
-        0x7F,
-        *range(0x202A, 0x202F),
-        *range(0x2066, 0x206A),
-    ]
-)
-
-
-def _reject_invisible_characters(value: str) -> str:
-    if any(ord(char) in _FORBIDDEN_CODEPOINTS for char in value):
-        raise ValueError("prompt contains control or bidirectional override characters")
-    return value
-
 
 # Untrusted free text that will reach the LLM. Validating it does NOT make the LLM
 # output trustworthy: that output goes through its own schema + policy validation.
 Prompt = Annotated[
     str,
     StringConstraints(min_length=3, max_length=2000),
-    AfterValidator(_reject_invisible_characters),
+    AfterValidator(reject_invisible_characters),
 ]
 
 # The browser's IANA time zone ("Europe/Paris"), written to the workspace as ${EC_TZ}. Only

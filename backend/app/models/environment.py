@@ -5,12 +5,26 @@ from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints, model_validator
 
-from app.models.common import JobMode, ProjectName, StrictModel, TemplateId
+from app.models.common import (
+    JobMode,
+    ProjectName,
+    StrictModel,
+    TemplateId,
+    reject_invisible_characters,
+    reject_line_breaks,
+)
 from app.models.template import ServiceName
 
 DisplayName = Annotated[str, StringConstraints(min_length=1, max_length=60)]
+# Written by the user from the environment drawer: rendered with textContent only.
+EnvironmentTitle = Annotated[
+    str, StringConstraints(min_length=1, max_length=80), AfterValidator(reject_line_breaks)
+]
+EnvironmentNotes = Annotated[
+    str, StringConstraints(max_length=2000), AfterValidator(reject_invisible_characters)
+]
 
 
 class WebEndpoint(StrictModel):
@@ -28,7 +42,8 @@ class EnvironmentService(StrictModel):
 
 
 class EnvironmentMeta(StrictModel):
-    """`workspaces/<project>/meta.json`, written once by the workspace step.
+    """`workspaces/<project>/meta.json`, written by the workspace step, then rewritten
+    atomically when the user edits the title or the notes.
 
     It records what was asked for (template, title, web addresses); what is
     actually running comes from Docker. It never contains a secret. It is read
@@ -45,6 +60,20 @@ class EnvironmentMeta(StrictModel):
     services: list[EnvironmentService] = Field(min_length=1, max_length=12)
     urls: list[WebEndpoint] = Field(default_factory=list, max_length=6)
     volumes: list[str] = Field(default_factory=list, max_length=16)
+    notes: Annotated[str, StringConstraints(max_length=2000)] = ""
+
+
+class EnvironmentUpdate(StrictModel):
+    """Body of PATCH /api/environments/{project}: the display title, the notes, or both."""
+
+    title: EnvironmentTitle | None = None
+    notes: EnvironmentNotes | None = None
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "EnvironmentUpdate":
+        if self.title is None and self.notes is None:
+            raise ValueError("send a title, notes, or both")
+        return self
 
 
 class EnvironmentState(StrEnum):
@@ -84,6 +113,7 @@ class EnvironmentView(BaseModel):
     urls: list[WebEndpoint]
     volumes: list[str]
     job: ActiveJobRef | None  # the job running on this environment, if any
+    notes: str = ""  # written by the user
 
 
 class EnvironmentListResponse(BaseModel):

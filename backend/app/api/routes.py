@@ -26,17 +26,19 @@ from app.models.deployment import (
     LifecycleRequest,
     PlanRequest,
 )
-from app.models.environment import EnvironmentListResponse, EnvironmentView
+from app.models.environment import EnvironmentListResponse, EnvironmentUpdate, EnvironmentView
 from app.models.plan import PlanView
 from app.models.settings import LLMKeyRequest, SettingsView
 from app.models.system import SystemView, TemplateReadiness
 from app.models.template import CATEGORY_LABELS, CategoryInfo, TemplateCatalogResponse
 from app.services.llm_settings import SettingsStorageError
 from app.services.orchestrator import (
+    EnvironmentBusyError,
     Job,
     JobNotCancellableError,
     ProjectNameConflictError,
     TranslatorUnavailableError,
+    UneditableEnvironmentError,
     UnknownEnvironmentError,
     UnknownJobError,
     UnknownPlanError,
@@ -240,6 +242,33 @@ async def list_environments(inventory: InventoryDep) -> EnvironmentListResponse:
 async def get_environment(
     project: Annotated[str, Path(pattern=PROJECT_NAME_PATTERN)], inventory: InventoryDep
 ) -> EnvironmentView:
+    view = await inventory.get(project)
+    if view is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")
+    return view
+
+
+@router.patch("/environments/{project}", dependencies=[Depends(require_trusted_json_request)])
+async def update_environment(
+    project: Annotated[str, Path(pattern=PROJECT_NAME_PATTERN)],
+    payload: EnvironmentUpdate,
+    orchestrator: OrchestratorDep,
+    inventory: InventoryDep,
+) -> EnvironmentView:
+    """Change the display title or the notes of an environment: a small atomic rewrite of
+    its meta.json, done within the request (no job)."""
+    try:
+        await orchestrator.update_environment(project, payload)
+    except UnknownEnvironmentError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment") from None
+    except EnvironmentBusyError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A job is running for this environment"
+        ) from None
+    except UneditableEnvironmentError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The details of this environment cannot be edited"
+        ) from None
     view = await inventory.get(project)
     if view is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")

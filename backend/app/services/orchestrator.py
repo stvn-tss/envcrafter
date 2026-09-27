@@ -53,7 +53,12 @@ from app.models.deployment import (
     PromptDeploymentRequest,
     TemplateDeploymentRequest,
 )
-from app.models.environment import EnvironmentMeta, EnvironmentService, WebEndpoint
+from app.models.environment import (
+    EnvironmentMeta,
+    EnvironmentService,
+    EnvironmentUpdate,
+    WebEndpoint,
+)
 from app.models.plan import PlanServiceView, PlanView
 from app.models.stack import Candidate, StackBlueprint
 from app.models.template import is_valid_secret_name
@@ -124,6 +129,14 @@ class TranslatorUnavailableError(RuntimeError):
 
 class UnknownJobError(LookupError):
     pass
+
+
+class EnvironmentBusyError(ValueError):
+    """A job runs on this environment: its details cannot change meanwhile."""
+
+
+class UneditableEnvironmentError(ValueError):
+    """The environment has no readable meta.json (created by an older version)."""
 
 
 class JobNotCancellableError(ValueError):
@@ -260,6 +273,8 @@ class Orchestrator:
         # a running job could be garbage-collected mid-flight. It also lets
         # shutdown() cancel in-flight jobs cleanly.
         self._tasks: set[asyncio.Task[None]] = set()
+        # Projects whose meta.json is being rewritten: held like an active job.
+        self._editing: set[str] = set()
 
     def get(self, job_id: UUID) -> Job | None:
         return self._jobs.get(job_id)
@@ -434,6 +449,24 @@ class Orchestrator:
         }
         return self._launch(job, plans[action])
 
+    async def update_environment(self, project: str, update: EnvironmentUpdate) -> EnvironmentMeta:
+        """Change the title or the notes of an environment: an atomic rewrite of its
+        meta.json. The project is held meanwhile, as a job would hold it, so no removal
+        can delete the directory during the rewrite."""
+        if project in self._editing or self.active_job(project) is not None:
+            raise EnvironmentBusyError(project)
+        self._editing.add(project)
+        try:
+            if await asyncio.to_thread(self._workspaces.get, project) is None:
+                raise UnknownEnvironmentError(project)
+            changes = update.model_dump(exclude_none=True)
+            try:
+                return await asyncio.to_thread(self._workspaces.update_meta, project, changes)
+            except WorkspaceError:
+                raise UneditableEnvironmentError(project) from None
+        finally:
+            self._editing.discard(project)
+
     async def shutdown(self) -> None:
         for task in self._tasks:
             task.cancel()
@@ -449,7 +482,7 @@ class Orchestrator:
 
     async def _reserve(self, job: Job, *, must_exist: bool) -> None:
         project = self._project(job)
-        if any(
+        if project in self._editing or any(
             other.project_name == project and other.status in _ACTIVE_STATUSES
             for other in self._jobs.values()
         ):
