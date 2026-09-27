@@ -1,9 +1,9 @@
-"""Engine readings behind the readiness endpoints, shared for a few seconds.
+"""Engine readings behind the readiness and usage endpoints, shared for a few seconds.
 
 Any web page can send GET requests to the local API, and each reading starts docker
 processes. Like the inventory's `docker ps`, a reading is computed once at a time per
 key (single-flight) and reused for `cache_seconds`; keys are bounded (the system, and
-templates resolved through the catalog).
+templates resolved through the catalog, projects that have a workspace).
 """
 
 import asyncio
@@ -11,7 +11,14 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar, cast
 
-from app.engine.base import Engine, EngineError, HostResources, RuntimeCheck
+from app.engine.base import (
+    Engine,
+    EngineError,
+    HostResources,
+    RuntimeCheck,
+    ServiceUsage,
+    StackHandle,
+)
 
 T = TypeVar("T")
 
@@ -40,6 +47,16 @@ class ReadinessProbe:
         """How many of the template's images are missing (None: Docker cannot tell), and the
         resources left."""
         return await self._cached(f"template:{template_id}", lambda: self._read_template(images))
+
+    async def usage(self, stack: StackHandle) -> list[ServiceUsage] | None:
+        """CPU and memory of each running service, or None when Docker cannot tell."""
+        return await self._cached(f"usage:{stack.project}", lambda: self._read_usage(stack))
+
+    async def _read_usage(self, stack: StackHandle) -> list[ServiceUsage] | None:
+        try:
+            return await self._engine.usage(stack)
+        except EngineError:
+            return None
 
     async def _read_system(self) -> tuple[list[RuntimeCheck], HostResources]:
         runtime, resources = await asyncio.gather(self._engine.diagnose(), self._engine.resources())

@@ -1,6 +1,7 @@
 """REST endpoints: health, template catalog, deployment jobs, the environment inventory
 and the settings changed from the UI."""
 
+from dataclasses import asdict
 from typing import Annotated
 from uuid import UUID
 
@@ -27,7 +28,13 @@ from app.models.deployment import (
     LifecycleRequest,
     PlanRequest,
 )
-from app.models.environment import EnvironmentListResponse, EnvironmentUpdate, EnvironmentView
+from app.models.environment import (
+    EnvironmentListResponse,
+    EnvironmentUpdate,
+    EnvironmentUsage,
+    EnvironmentView,
+    ServiceUsageView,
+)
 from app.models.history import ActivityResponse
 from app.models.plan import PlanView
 from app.models.settings import LLMKeyRequest, SettingsView
@@ -251,6 +258,24 @@ async def get_environment(
     if view is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")
     return view
+
+
+@router.get("/environments/{project}/usage")
+async def get_environment_usage(
+    project: Annotated[str, Path(pattern=PROJECT_NAME_PATTERN)],
+    inventory: InventoryDep,
+    readiness: ReadinessDep,
+) -> EnvironmentUsage:
+    """CPU and memory of each running service: one `docker stats` sample, shared between
+    callers for a few seconds (any web page can send GET requests to the local API)."""
+    stack = await inventory.stack(project)
+    if stack is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown environment")
+    usage = await readiness.usage(stack)
+    return EnvironmentUsage(
+        available=usage is not None,
+        services=[ServiceUsageView(**asdict(item)) for item in usage or []],
+    )
 
 
 @router.get("/environments/{project}/activity")

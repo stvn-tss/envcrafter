@@ -98,6 +98,18 @@ class EnvironmentInventory:
             records.append(_Record(project, self._workspaces.read_meta(project), stack))
         return records
 
+    async def stack(self, project: str) -> StackHandle | None:
+        """The handle of an environment that has a workspace, else None."""
+        workspace = await asyncio.to_thread(self._workspaces.get, project)
+        if workspace is None:
+            return None
+        return StackHandle(
+            project=project,
+            compose_project=compose_project_name(project),
+            compose_file=workspace.compose_file,
+            edge_network=None,
+        )
+
     async def _observe(self, stacks: list[StackHandle]) -> dict[str, list[ServiceStatus]] | None:
         """Engine state for these stacks, or None when the engine cannot be queried."""
         key: _CacheKey = (

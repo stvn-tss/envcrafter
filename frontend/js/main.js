@@ -1,10 +1,11 @@
 /** Entry point: wires the catalog, the request form, the dialogs, the settings and the status console. */
 import {
-  ApiError, cancelJob, createJob, createPlan, fetchActiveJobs, fetchJob, fetchPlan, fetchReadiness, fetchSystem,
-  fetchTemplates, removeEnvironment, runEnvironmentAction,
+  ApiError, cancelJob, createJob, createPlan, fetchActiveJobs, fetchActivity, fetchEnvironmentUsage, fetchJob,
+  fetchPlan, fetchReadiness, fetchSystem, fetchTemplates, removeEnvironment, runEnvironmentAction, updateEnvironment,
 } from "./api.js";
 import { Catalog, rankTemplates } from "./catalog.js";
 import { loadConfig } from "./config.js";
+import { EnvironmentDrawer } from "./environment-drawer.js";
 import { withProject } from "./environment.js";
 import { EnvironmentsPanel } from "./environments.js";
 import { icon } from "./icons.js";
@@ -162,33 +163,55 @@ async function openPlan(planId) {
     showToast(error instanceof ApiError ? error.message : "The plan could not be loaded.");
   }
 }
-const environments = new EnvironmentsPanel(document.querySelector("#environments"), {
-  onAction: async (project, action, environment) => {
-    const error = await run(() => runEnvironmentAction(project, action), { title: environment.title, templateId: environment.template_id });
-    if (error) {
-      showToast(error);
-      environments.refresh(); // re-enables the row's buttons without waiting for the next poll
-    }
-  },
+/** Stop, start or restart an environment, or restart one of its services. */
+async function runEnvironmentJob(environment, action, service = null) {
+  const error = await run(
+    () => runEnvironmentAction(environment.project, action, service),
+    { title: environment.title, templateId: environment.template_id },
+  );
+  if (error) {
+    showToast(error);
+    environments.refresh(); // re-enables the buttons without waiting for the next poll
+  }
+}
+
+/** Default accounts and first steps of the environment's template. */
+function accessNotes(environment) {
+  const template = templatesById.get(environment.template_id);
+  const notes = Array.isArray(template?.access_notes) ? template.access_notes : [];
+  return notes.map((note) => withProject(note, environment.project));
+}
+
+const drawer = new EnvironmentDrawer(document.querySelector("#environment-drawer"), {
+  onAction: (environment, action) => runEnvironmentJob(environment, action),
+  onRestartService: (environment, service) => runEnvironmentJob(environment, "restart", service),
   onLogs: (environment) => logsDialog.open(environment),
-  onRestartService: async (environment, service) => {
-    const error = await run(
-      () => runEnvironmentAction(environment.project, "restart", service),
-      { title: environment.title, templateId: environment.template_id },
-    );
-    if (error) {
-      showToast(error);
+  onRemove: (target) => removeDialog.open(target),
+  onSave: async (project, changes) => {
+    try {
+      await updateEnvironment(project, changes);
       environments.refresh();
+      return null;
+    } catch (error) {
+      return error instanceof ApiError ? error.message : "Unable to reach the EnvCrafter API.";
     }
   },
+  notesFor: accessNotes,
+  templateFor: (environment) => templatesById.get(environment.template_id),
+  fetchUsage: fetchEnvironmentUsage,
+  fetchActivity,
+});
+
+const environments = new EnvironmentsPanel(document.querySelector("#environments"), {
+  onAction: (project, action, environment) => runEnvironmentJob(environment, action),
+  onLogs: (environment) => logsDialog.open(environment),
+  onRestartService: (environment, service) => runEnvironmentJob(environment, "restart", service),
   onRemove: (target) => removeDialog.open(target),
+  onDetails: (environment) => drawer.open(environment),
   onFollow: (job, environment) => follow({ job: { ...job, project_name: environment.project }, context: { title: environment.title, templateId: environment.template_id } }),
-  notesFor: (environment) => {
-    const template = templatesById.get(environment.template_id);
-    const notes = Array.isArray(template?.access_notes) ? template.access_notes : [];
-    return notes.map((note) => withProject(note, environment.project));
-  },
+  notesFor: accessNotes,
   onUpdate: (list) => {
+    drawer.update(list);
     const counts = new Map();
     for (const environment of list) {
       if (environment.template_id && LIVE_STATES.has(environment.state)) {

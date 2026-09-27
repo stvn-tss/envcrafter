@@ -17,6 +17,7 @@ from app.engine.base import (
     ProgressSink,
     RuntimeCheck,
     ServiceStatus,
+    ServiceUsage,
     StackHandle,
 )
 
@@ -100,6 +101,15 @@ class SimulatedEngine:
 
     async def resources(self) -> HostResources:
         return _RESOURCES
+
+    async def usage(self, stack: StackHandle) -> list[ServiceUsage]:
+        if stack.compose_project in self._stopped:
+            return []
+        # Plausible numbers for the UI; nothing is measured.
+        return [
+            ServiceUsage(service=name, cpu_percent=0.5, memory_mb=64)
+            for name in sorted(await self._images(stack))
+        ]
 
     async def diagnose(self) -> list[RuntimeCheck]:
         return [

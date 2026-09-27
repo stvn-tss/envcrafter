@@ -133,6 +133,17 @@ class EnvironmentView(BaseModel):
     disposable: bool = False  # removal asks for a simple confirmation
 
 
+class ServiceUsageView(BaseModel):
+    service: str
+    cpu_percent: float | None  # of one CPU core: 200 means two cores busy
+    memory_mb: int | None
+
+
+class EnvironmentUsage(BaseModel):
+    available: bool  # False when Docker cannot tell
+    services: list[ServiceUsageView]  # running services only, sorted by name
+
+
 class EnvironmentListResponse(BaseModel):
     environments: list[EnvironmentView]  # newest first
 

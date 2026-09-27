@@ -211,6 +211,40 @@ def test_a_disposable_lab_is_removed_after_a_short_undo_window(
     assert errors == []
 
 
+def test_the_environment_drawer_gathers_everything(page: Page, live_server: LiveServer) -> None:
+    errors = open_home(page, live_server)
+    deploy_template(page, "DVWA", "lab")
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+    row = page.locator(".environment", has=page.locator("code", has_text="lab"))
+    row.get_by_role("button", name="Details of lab").click()
+
+    drawer = page.locator("#environment-drawer")
+    expect(drawer).to_be_visible()
+    expect(drawer.locator("#drawer-title")).to_have_text("DVWA")
+    expect(drawer).to_contain_text("http://lab.localhost")
+    expect(drawer).to_contain_text("admin / password")
+    expect(drawer.locator(".option-list")).to_contain_text("Security level")
+    expect(drawer.locator(".option-list")).to_contain_text("Low")
+    expect(drawer.locator(".usage").first).to_contain_text("64 MB", timeout=10_000)
+    expect(drawer.locator(".activity-list")).to_contain_text("Environment 'lab' is ready")
+    assert serious_violations(page) == []
+
+    drawer.get_by_label("Title").fill("SQLi practice")
+    drawer.get_by_label("Notes").fill("Switch to high tomorrow.")
+    drawer.get_by_role("button", name="Save").click()
+    expect(drawer.locator(".save-status")).to_have_text("Saved")
+    expect(drawer.locator(".activity-list")).to_contain_text("Notes edited", timeout=10_000)
+    expect(row.locator(".environment-title strong")).to_have_text("SQLi practice", timeout=10_000)
+
+    page.reload()
+    page.locator(".environment", has=page.locator("code", has_text="lab")).get_by_role(
+        "button", name="Details of lab"
+    ).click()
+    expect(drawer.get_by_label("Notes")).to_have_value("Switch to high tomorrow.")
+    expect(drawer.locator("#drawer-title")).to_have_text("SQLi practice")
+    assert errors == []
+
+
 def test_theme_can_be_pinned_in_settings(page: Page, live_server: LiveServer) -> None:
     page.emulate_media(color_scheme="light")
     open_home(page, live_server)

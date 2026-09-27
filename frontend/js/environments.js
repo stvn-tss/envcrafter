@@ -4,7 +4,9 @@
  * and the sign-in notes of its template, long after the deployment panel moved on.
  *
  * Rows are keyed by project and updated in place: a poll never destroys the button a
- * keyboard user is focused on, nor closes the notes someone is reading.
+ * keyboard user is focused on, nor closes the notes someone is reading. The rules that
+ * turn a view into a badge and a set of actions are exported: the environment drawer
+ * shows the same ones.
  */
 import { fetchEnvironments } from "./api.js";
 import { copyButton } from "./clipboard.js";
@@ -36,7 +38,7 @@ const HEALTH = {
 };
 
 /** Label and tone of one service's container, from Docker's state and health. */
-function serviceState(service) {
+export function serviceState(service) {
   if (service.state === "running") return HEALTH[service.health] ?? { label: "Running", tone: "succeeded" };
   if (typeof service.state !== "string" || !service.state) return { label: "No container", tone: "idle" };
   const label = service.state.charAt(0).toUpperCase() + service.state.slice(1, 20);
@@ -47,6 +49,51 @@ const CAN_START = new Set(["stopped", "degraded", "missing", "failed"]);
 // what is being debugged.
 const IN_PLACE = new Set([...CAN_STOP, "failed"]);
 const actionControls = (row) => [row.stop, row.start, row.restart, row.remove];
+
+/** Whether a job (deployment, stop, removal...) runs on this environment. */
+export function isBusy(environment) {
+  return Boolean(environment?.job && typeof environment.job.job_id === "string");
+}
+
+/** The badge of an environment: the job running on it, else its state. */
+export function environmentBadge(environment) {
+  const state = STATES[environment?.state] ?? STATES.unknown;
+  if (!isBusy(environment)) return state;
+  const label = environment.job.cancel_requested === true ? "Cancelling" : JOB_LABELS[environment.job.mode];
+  return { label: label ?? "Working", tone: "running" };
+}
+
+/** Which actions fit the environment's state, a running job aside. */
+export function availableActions(environment) {
+  const state = environment?.state;
+  return {
+    stop: IN_PLACE.has(state),
+    start: CAN_START.has(state),
+    restart: CAN_STOP.has(state),
+    restartService: IN_PLACE.has(state),
+    links: IN_PLACE.has(state),
+  };
+}
+
+/** "Template · 2 services · created ..." under the title. */
+export function metaLine(environment) {
+  const services = Array.isArray(environment?.services) ? environment.services : [];
+  const origin = environment?.origin === "template" ? "Template" : environment?.origin === "prompt" ? "AI request" : "Environment";
+  const created = environment?.created_at ? new Date(environment.created_at) : null;
+  return [
+    origin,
+    `${services.length} service${services.length === 1 ? "" : "s"}`,
+    created && !Number.isNaN(created.getTime()) ? `created ${created.toLocaleString()}` : null,
+    environment?.failure ? "failed deployment, kept for debugging" : null,
+  ].filter(Boolean).join(" · ");
+}
+
+/** Every web UI of the environment that EnvCrafter itself generated, main one first. */
+export function webAddresses(environment) {
+  return Array.isArray(environment?.urls)
+    ? environment.urls.filter((item) => typeof item?.name === "string" && isEnvironmentUrl(item?.url))
+    : [];
+}
 
 export class EnvironmentsPanel {
   #timer = 0;
@@ -61,6 +108,7 @@ export class EnvironmentsPanel {
    *           onRemove: (target: { project: string, volumes: string[] | null }) => void,
    *           onFollow: (job: object, environment: object) => void,
    *           onRestartService: (environment: object, service: string) => void,
+   *           onDetails: ((environment: object) => void) | null,
    *           onUpdate: (environments: object[]) => void,
    *           notesFor: (environment: object) => string[] }} handlers
    */
@@ -151,6 +199,7 @@ export class EnvironmentsPanel {
       linksKey: "",
       notesList: el("ul", { className: "notes" }),
       notesKey: "",
+      details: button("Details", (env) => this.handlers.onDetails?.(env)),
       progress: button("View progress", (env) => this.handlers.onFollow(env.job, env), "button small primary"),
       logs: button("Logs", (env) => this.handlers.onLogs?.(env)),
       stop: button("Stop", (env) => this.#act(project, "stop", env)),
@@ -162,10 +211,11 @@ export class EnvironmentsPanel {
         disposable: env.disposable === true,
       }), "button small danger"),
     };
-    for (const [key, label] of [["progress", "View progress of"], ["logs", "Logs of"], ["stop", "Stop"], ["start", "Start"], ["restart", "Restart"], ["remove", "Remove"]]) {
+    for (const [key, label] of [["details", "Details of"], ["progress", "View progress of"], ["logs", "Logs of"], ["stop", "Stop"], ["start", "Start"], ["restart", "Restart"], ["remove", "Remove"]]) {
       parts[key].setAttribute("aria-label", `${label} ${project}`);
     }
     parts.logs.hidden = !this.handlers.onLogs;
+    parts.details.hidden = !this.handlers.onDetails;
     parts.servicesSummary = el("summary", { text: "Services" });
     parts.servicesList = el("ul", { className: "service-states" });
     parts.serviceRows = new Map(); // service -> { item, name, state, restart }
@@ -184,7 +234,7 @@ export class EnvironmentsPanel {
       parts.services,
       parts.notes,
       el("div", { className: "environment-actions" }, [
-        parts.progress, parts.logs, parts.stop, parts.start, parts.restart, parts.remove,
+        parts.details, parts.progress, parts.logs, parts.stop, parts.start, parts.restart, parts.remove,
       ]),
     ]);
     this.#rows.set(project, parts);
@@ -204,23 +254,16 @@ export class EnvironmentsPanel {
   }
 
   #updateRow(row, environment) {
-    const busy = environment.job && typeof environment.job.job_id === "string";
-    const state = STATES[environment.state] ?? STATES.unknown;
+    const busy = isBusy(environment);
+    const badge = environmentBadge(environment);
+    const actions = availableActions(environment);
     row.item.dataset.state = environment.state ?? "unknown";
     row.title.textContent = typeof environment.title === "string" ? environment.title : environment.project;
-    const jobLabel = environment.job?.cancel_requested === true ? "Cancelling" : JOB_LABELS[environment.job?.mode];
-    row.state.textContent = busy ? (jobLabel ?? "Working") : state.label;
-    row.state.dataset.tone = busy ? "running" : state.tone;
+    row.state.textContent = badge.label;
+    row.state.dataset.tone = badge.tone;
 
     const services = Array.isArray(environment.services) ? environment.services : [];
-    const origin = environment.origin === "template" ? "Template" : environment.origin === "prompt" ? "AI request" : "Environment";
-    const created = environment.created_at ? new Date(environment.created_at) : null;
-    row.meta.textContent = [
-      origin,
-      `${services.length} service${services.length === 1 ? "" : "s"}`,
-      created && !Number.isNaN(created.getTime()) ? `created ${created.toLocaleString()}` : null,
-      environment.failure ? "failed deployment, kept for debugging" : null,
-    ].filter(Boolean).join(" · ");
+    row.meta.textContent = metaLine(environment);
 
     this.#renderLinks(row, environment);
     this.#renderServices(row, environment, busy);
@@ -228,17 +271,15 @@ export class EnvironmentsPanel {
 
     row.progress.hidden = !busy;
     row.logs.disabled = Boolean(busy) || services.length === 0;
-    row.stop.hidden = !IN_PLACE.has(environment.state);
-    row.start.hidden = !CAN_START.has(environment.state);
-    row.restart.hidden = !CAN_STOP.has(environment.state);
+    row.stop.hidden = !actions.stop;
+    row.start.hidden = !actions.start;
+    row.restart.hidden = !actions.restart;
     for (const control of actionControls(row)) control.disabled = Boolean(busy) || environment.state === "pending";
   }
 
   /** Every web UI while the environment runs, main one first. Rebuilt only on change. */
   #renderLinks(row, environment) {
-    const urls = IN_PLACE.has(environment.state) && Array.isArray(environment.urls)
-      ? environment.urls.filter((item) => typeof item?.name === "string" && isEnvironmentUrl(item?.url))
-      : [];
+    const urls = availableActions(environment).links ? webAddresses(environment) : [];
     const key = JSON.stringify(urls.map((item) => [item.name, item.url]));
     row.links.hidden = urls.length === 0;
     if (key === row.linksKey) return;
@@ -257,7 +298,7 @@ export class EnvironmentsPanel {
       .filter((service) => SERVICE.test(service?.service ?? ""));
     row.services.hidden = services.length === 0;
     row.servicesSummary.textContent = `Services (${services.length})`;
-    const canRestart = !busy && IN_PLACE.has(environment.state);
+    const canRestart = !busy && availableActions(environment).restartService;
     const seen = new Set();
     for (const service of services) {
       seen.add(service.service);

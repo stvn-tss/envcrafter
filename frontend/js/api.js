@@ -65,6 +65,16 @@ export async function removeEnvironment(project) {
   return response.json();
 }
 
+/** CPU and memory of each running service of an environment (one shared sample). */
+export function fetchEnvironmentUsage(project) {
+  return getJson(`/api/environments/${encodeURIComponent(project)}/usage`);
+}
+
+/** Jobs and edits of an environment since its latest deployment, newest first. */
+export function fetchActivity(project) {
+  return getJson(`/api/environments/${encodeURIComponent(project)}/activity?limit=30`);
+}
+
 /** Changes the title or the notes of an environment; resolves with its updated view. */
 export async function updateEnvironment(project, changes) {
   const response = await fetch(`/api/environments/${encodeURIComponent(project)}`, {

@@ -7,13 +7,22 @@ from typing import Any
 
 import pytest
 
-from app.engine.base import EngineError, LogLine, LogSink, ServiceStatus, StackHandle
+from app.engine.base import (
+    EngineError,
+    LogLine,
+    LogSink,
+    ServiceStatus,
+    ServiceUsage,
+    StackHandle,
+)
 from app.engine.docker_compose import (
     DockerComposeEngine,
     _describe,
     _drain_stderr,
     parse_log_line,
     parse_ps_output,
+    parse_stats_output,
+    parse_usage_listing,
 )
 
 
@@ -201,6 +210,66 @@ async def test_restarting_one_service_reattaches_the_reverse_proxy(
         "docker network connect",
         "docker compose up",
     ]
+
+
+def test_stats_lines_become_per_service_usage() -> None:
+    services = {"0123456789ab": "glpi", "ba9876543210": "mariadb", "abcdefabcdef": "cache"}
+    output = (
+        "0123456789ab\t1.25%\t215.4MiB / 7.6GiB\n"
+        "ba9876543210\t--\t1.5GiB / 7.6GiB\n"
+        "abcdefabcdef\t0.00%\t512kB / 1GB\n"
+        "ffffffffffff\t9.00%\t1MiB / 1GiB\n"  # not one of ours: dropped
+        "garbage line\n"
+    )
+    assert parse_stats_output(output, services) == [
+        ServiceUsage(service="cache", cpu_percent=0.0, memory_mb=0),
+        ServiceUsage(service="glpi", cpu_percent=1.25, memory_mb=215),
+        ServiceUsage(service="mariadb", cpu_percent=None, memory_mb=1536),
+    ]
+
+
+def test_usage_listing_keeps_envcrafter_shaped_lines_only() -> None:
+    output = (
+        "0123456789ab\tglpi\n"
+        "not-an-id\tglpi\n"  # container ids are hexadecimal
+        "0123456789ac\tBad Name\n"  # labels are data: not a service name
+        "0123456789ad\tweb\textra\n"
+    )
+    assert parse_usage_listing(output) == {"0123456789ab": "glpi"}
+
+
+@pytest.mark.anyio
+async def test_usage_samples_the_running_containers_of_one_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine()
+    asked: list[list[str]] = []
+    outputs = ["0123456789ab\tglpi\n", "0123456789ab\t3.50%\t100MiB / 2GiB\n"]
+
+    async def capture(args: list[str], *, timeout: float) -> str:  # noqa: ASYNC109
+        asked.append(args)
+        return outputs.pop(0)
+
+    monkeypatch.setattr(engine, "_capture", capture)
+
+    usage = await engine.usage(_stack(tmp_path))
+
+    assert usage == [ServiceUsage(service="glpi", cpu_percent=3.5, memory_mb=100)]
+    listing, stats = asked
+    assert "label=envcrafter.project=demo" in listing
+    assert stats[:3] == ["stats", "--no-stream", "--format"]
+    assert stats[-1] == "0123456789ab"
+
+
+@pytest.mark.anyio
+async def test_usage_of_a_project_without_running_containers_skips_stats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = _engine()
+    recorder = _Recorder([""])
+    _wire(engine, recorder, monkeypatch)
+    assert await engine.usage(_stack(tmp_path)) == []
+    assert recorder.calls == ["docker ps"]
 
 
 def test_log_lines_are_parsed_and_sanitized() -> None:

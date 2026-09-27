@@ -32,6 +32,15 @@ class ServiceStatus:
 
 
 @dataclass(frozen=True)
+class ServiceUsage:
+    """CPU and memory of one running service container. None: not measurable."""
+
+    service: str
+    cpu_percent: float | None
+    memory_mb: int | None
+
+
+@dataclass(frozen=True)
 class HostResources:
     """What the Docker host has left, as its containers see it. None: not measurable."""
 
@@ -92,6 +101,11 @@ class Engine(Protocol):
 
     async def resources(self) -> HostResources:
         """Memory and disk left for containers. Never raises: unknown values are None."""
+        ...
+
+    async def usage(self, stack: StackHandle) -> list[ServiceUsage]:
+        """CPU and memory of the project's running containers (one `docker stats` sample),
+        sorted by service. Raises EngineError when Docker does not answer."""
         ...
 
     async def diagnose(self) -> list[RuntimeCheck]:

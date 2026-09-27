@@ -28,6 +28,7 @@ from app.engine.base import (
     ProgressSink,
     RuntimeCheck,
     ServiceStatus,
+    ServiceUsage,
     StackHandle,
 )
 from app.engine.host import read_host_resources
@@ -50,6 +51,25 @@ _STATUS_FORMAT = (
     f'{{{{.Label "{PROJECT_LABEL}"}}}}\t{{{{.Label "{SERVICE_LABEL}"}}}}'
     "\t{{.State}}\t{{.HealthStatus}}"
 )
+# `docker ps` of one project's running containers, then one `docker stats` sample of them.
+_USAGE_FORMAT = f'{{{{.ID}}}}\t{{{{.Label "{SERVICE_LABEL}"}}}}'
+_STATS_FORMAT = "{{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+_CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
+_PERCENT_RE = re.compile(r"^(\d+(?:\.\d+)?)%$")
+_SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([A-Za-z]+)$")
+# Docker prints binary units (MiB), sometimes decimal ones (MB): both, in MiB.
+_MIB_PER_UNIT = {
+    "B": 1 / 2**20,
+    "KiB": 1 / 2**10,
+    "MiB": 1.0,
+    "GiB": 2.0**10,
+    "TiB": 2.0**20,
+    "kB": 1e3 / 2**20,
+    "KB": 1e3 / 2**20,
+    "MB": 1e6 / 2**20,
+    "GB": 1e9 / 2**20,
+    "TB": 1e12 / 2**20,
+}
 _TIMESTAMP_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s?(.*)$"
 )
@@ -278,6 +298,30 @@ class DockerComposeEngine:
     async def resources(self) -> HostResources:
         return await asyncio.to_thread(read_host_resources, self._disk_path)
 
+    async def usage(self, stack: StackHandle) -> list[ServiceUsage]:
+        if not _PROJECT_RE.fullmatch(stack.project):
+            raise EngineError("Invalid project name.")
+        listing = await self._capture(
+            [
+                "ps",
+                "--filter",
+                f"label={MANAGED_LABEL}=true",
+                "--filter",
+                f"label={PROJECT_LABEL}={stack.project}",
+                "--format",
+                _USAGE_FORMAT,
+            ],
+            timeout=20,
+        )
+        services = parse_usage_listing(listing)
+        if not services:
+            return []  # nothing runs: no sample to take
+        # Container ids come from Docker's own output and are checked hexadecimal.
+        output = await self._capture(
+            ["stats", "--no-stream", "--format", _STATS_FORMAT, *services], timeout=30
+        )
+        return parse_stats_output(output, services)
+
     async def diagnose(self) -> list[RuntimeCheck]:
         try:
             version = await self._capture(
@@ -445,6 +489,51 @@ def parse_ps_output(output: str) -> dict[str, list[ServiceStatus]]:
     return result
 
 
+def parse_usage_listing(output: str) -> dict[str, str]:
+    """`docker ps --format _USAGE_FORMAT` -> {container id: service}. Labels are data:
+    a line that is not EnvCrafter-shaped is dropped."""
+    services: dict[str, str] = {}
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if len(parts) != 2:
+            continue
+        container, service = parts
+        if _CONTAINER_ID_RE.fullmatch(container) and _SERVICE_RE.fullmatch(service):
+            services[container] = service
+    return services
+
+
+def parse_stats_output(output: str, services: dict[str, str]) -> list[ServiceUsage]:
+    """`docker stats --format _STATS_FORMAT` lines ("<id>\t1.25%\t215MiB / 7.6GiB") of
+    the listed containers, as usage per service sorted by service."""
+    usage: list[ServiceUsage] = []
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if len(parts) != 3 or parts[0] not in services:
+            continue
+        _, cpu, memory = parts
+        usage.append(
+            ServiceUsage(
+                service=services[parts[0]],
+                cpu_percent=_percent(cpu.strip()),
+                memory_mb=_mebibytes(memory.split("/")[0].strip()),
+            )
+        )
+    return sorted(usage, key=lambda item: item.service)
+
+
+def _percent(value: str) -> float | None:
+    match = _PERCENT_RE.fullmatch(value)
+    return float(match.group(1)) if match else None
+
+
+def _mebibytes(value: str) -> int | None:
+    match = _SIZE_RE.fullmatch(value)
+    if match is None or match.group(2) not in _MIB_PER_UNIT:
+        return None
+    return int(float(match.group(1)) * _MIB_PER_UNIT[match.group(2)])
+
+
 def parse_log_line(text: str) -> LogLine | None:
     """One `docker compose logs --timestamps` line, without colors or control characters.
 
@@ -487,7 +576,18 @@ async def _drain_stderr(process: asyncio.subprocess.Process, project: str, servi
             logger.warning("docker compose logs (%s/%s) stderr: %s", project, service, line)
 
 
-_VERBS = ("pull", "up", "down", "stop", "logs", "ps", "connect", "disconnect", "inspect")
+_VERBS = (
+    "pull",
+    "up",
+    "down",
+    "stop",
+    "logs",
+    "ps",
+    "stats",
+    "connect",
+    "disconnect",
+    "inspect",
+)
 
 
 def _describe(args: list[str]) -> str:
