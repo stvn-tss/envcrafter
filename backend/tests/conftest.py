@@ -10,7 +10,7 @@ from starlette.testclient import WebSocketTestSession
 from app.core.config import Settings
 from app.main import TranslatorFactory, create_app
 from app.policy.images import ImageAllowlist
-from app.translator.client import KeyRejectedError
+from app.translator.client import KeyRejectedError, TranslatorError
 from app.translator.spec import StackSpec
 
 TERMINAL_TYPES = {"job.succeeded", "job.failed", "job.cancelled"}
@@ -57,6 +57,16 @@ class FakeTranslator:
     async def verify(self) -> None:
         if self.rejected:
             raise KeyRejectedError("The Claude API rejected this key.")
+
+
+class FlakyTranslator(FakeTranslator):
+    """Fails like an unreachable API on the first request, then answers."""
+
+    async def translate(self, prompt: str) -> StackSpec:
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            raise TranslatorError("The LLM API is unreachable.")
+        return self.spec
 
 
 ClientFactory = Callable[..., TestClient]

@@ -72,6 +72,7 @@ def _summary(job: Job) -> JobSummary:
         plan_id=job.plan_id if job.mode == "planning" else None,
         cancel_requested=job.cancel_requested,
         service=job.service,
+        retryable=job.retryable,
         events_url=job_events_url(job.id),
     )
 

@@ -12,7 +12,7 @@ import uvicorn
 
 from app.core.config import Settings
 from app.main import TranslatorFactory, create_app
-from tests.conftest import TEST_API_KEY, FakeTranslator, spec
+from tests.conftest import TEST_API_KEY, FakeTranslator, FlakyTranslator, spec
 
 
 @dataclass(frozen=True)
@@ -91,6 +91,21 @@ def live_server_with_llm(tmp_path: Path) -> Iterator[LiveServer]:
         summary="A deliberately vulnerable shop to practise the OWASP Top 10.",
     )
     yield from _serve(tmp_path, delay=0.05, translator=FakeTranslator(llm_output))
+
+
+@pytest.fixture
+def live_server_flaky(tmp_path: Path) -> Iterator[tuple[LiveServer, FakeTranslator]]:
+    """The AI API fails once like an unreachable network, then answers."""
+    translator = FlakyTranslator(
+        spec(
+            decision="template",
+            template_id="owasp-juice-shop",
+            title="Juice Shop lab",
+            summary="A deliberately vulnerable shop to practise the OWASP Top 10.",
+        )
+    )
+    for server in _serve(tmp_path, delay=0.05, translator=translator):
+        yield server, translator
 
 
 @pytest.fixture

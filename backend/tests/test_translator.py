@@ -69,19 +69,21 @@ async def test_valid_plan_is_parsed_and_request_is_constrained(allowlist: ImageA
 
 
 @pytest.mark.parametrize(
-    ("response", "message"),
+    ("response", "message", "retryable"),
     [
-        (_response("", stop_reason="refusal"), "declined"),
-        (_response('{"decision": "cus', stop_reason="max_tokens"), "incomplete"),
-        (_response('{"decision": "template"}'), "invalid plan"),
+        # The same request would be declined again: Retry would only cost a request.
+        (_response("", stop_reason="refusal"), "declined", False),
+        (_response('{"decision": "cus', stop_reason="max_tokens"), "incomplete", True),
+        (_response('{"decision": "template"}'), "invalid plan", True),
     ],
 )
 async def test_unusable_answers_raise(
-    allowlist: ImageAllowlist, response: Any, message: str
+    allowlist: ImageAllowlist, response: Any, message: str, retryable: bool
 ) -> None:
     translator, _ = _translator(allowlist, response)
-    with pytest.raises(TranslatorError, match=message):
+    with pytest.raises(TranslatorError, match=message) as raised:
         await translator.translate("deploy something")
+    assert raised.value.retryable is retryable
 
 
 async def test_schema_enum_rejects_unknown_images(allowlist: ImageAllowlist) -> None:
@@ -228,16 +230,19 @@ _NO_CREDIT_MESSAGE = (
 
 
 @pytest.mark.parametrize(
-    ("error", "message"),
+    ("error", "message", "retryable"),
     [
-        (_api_error(anthropic.BadRequestError, 400, _NO_CREDIT_MESSAGE), "no credit left"),
-        (_api_error(anthropic.APIStatusError, 402, "Payment required"), "no credit left"),
-        (_api_error(anthropic.BadRequestError, 400, "max_tokens: too large"), "returned an error"),
-        (_status_error(anthropic.AuthenticationError, 401), "rejected"),
+        # Retrying cannot help until the user adds credit or fixes the key.
+        (_api_error(anthropic.BadRequestError, 400, _NO_CREDIT_MESSAGE), "no credit left", False),
+        (_api_error(anthropic.APIStatusError, 402, "Payment required"), "no credit left", False),
+        (_status_error(anthropic.AuthenticationError, 401), "rejected", False),
+        (_api_error(anthropic.BadRequestError, 400, "max_tokens: too large"), "an error", True),
+        (_status_error(anthropic.RateLimitError, 429), "rate limited", True),
     ],
 )
 async def test_translate_explains_api_failures(
-    allowlist: ImageAllowlist, error: Exception, message: str
+    allowlist: ImageAllowlist, error: Exception, message: str, retryable: bool
 ) -> None:
-    with pytest.raises(TranslatorError, match=message):
+    with pytest.raises(TranslatorError, match=message) as raised:
         await _failing_translator(allowlist, error).translate("deploy something")
+    assert raised.value.retryable is retryable

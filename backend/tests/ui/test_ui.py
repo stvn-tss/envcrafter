@@ -141,20 +141,38 @@ def test_dashboard_keeps_every_address_and_the_sign_in_notes(
     assert errors == []
 
 
-def test_a_failed_analysis_can_be_retried(
+def test_a_refused_analysis_offers_no_retry(
     page: Page, live_server_unsupported: tuple[LiveServer, FakeTranslator]
 ) -> None:
+    """The same request would be refused again: Retry would only cost an AI request."""
     server, translator = live_server_unsupported
     errors = open_home(page, server)
     page.locator("#prompt-input").fill("A mail server open to the Internet")
     page.get_by_role("button", name="Generate plan").click()
     expect(page.locator("#status-badge")).to_have_text("Failed", timeout=15_000)
 
+    result = page.locator("#job-result")
+    expect(result).to_contain_text("Public mail servers are out of scope.")
+    expect(result).to_contain_text("Change the request, then generate a new plan.")
+    expect(result.get_by_role("button", name="Retry")).to_have_count(0)
+    assert translator.prompts == ["A mail server open to the Internet"]
+    assert errors == []
+
+
+def test_a_transient_failure_can_be_retried(
+    page: Page, live_server_flaky: tuple[LiveServer, FakeTranslator]
+) -> None:
+    server, translator = live_server_flaky
+    errors = open_home(page, server)
+    prompt = "A vulnerable web app to practise the OWASP Top 10"
+    page.locator("#prompt-input").fill(prompt)
+    page.get_by_role("button", name="Generate plan").click()
+    expect(page.locator("#status-badge")).to_have_text("Failed", timeout=15_000)
+
     page.locator("#job-result").get_by_role("button", name="Retry").click()
 
-    expect(page.locator("#status-badge")).to_have_text("Failed", timeout=15_000)
-    expect(page.locator("#job-result").get_by_role("button", name="Retry")).to_be_visible()
-    assert translator.prompts == ["A mail server open to the Internet"] * 2
+    expect(page.locator("#plan-dialog")).to_be_visible(timeout=15_000)
+    assert translator.prompts == [prompt] * 2
     assert errors == []
 
 

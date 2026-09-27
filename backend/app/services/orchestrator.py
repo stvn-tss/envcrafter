@@ -134,7 +134,14 @@ class _JobCancelled(Exception):
 
 
 class StepFailedError(Exception):
-    """A step failed for a reason that is safe and useful to show to the user."""
+    """A step failed for a reason that is safe and useful to show to the user.
+
+    `retryable`: whether sending the same request again may succeed. A refusal (stack
+    rejected by the policy, unsupported request, expired plan) fails again the same way."""
+
+    def __init__(self, message: str, *, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 @dataclass
@@ -152,6 +159,8 @@ class Job:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     url: str | None = None
     urls: list[WebEndpoint] = field(default_factory=list)
+    message: str | None = None  # the message of the terminal event
+    retryable: bool | None = None  # set once the job failed: may the same request succeed?
     # Pipeline state, filled step by step.
     prompt: str | None = None
     plan_id: UUID | None = None
@@ -500,26 +509,33 @@ class Orchestrator:
             # after a mere request (flag only, uninterruptible step) is still a shutdown.
             if not (job.cancel_delivered and task is not None and task.cancelling() == 1):
                 job.status = JobStatus.FAILED
+                job.retryable = True
                 self._publish_failure(job, ctx, "Interrupted: the server is shutting down.")
                 raise
             task.uncancel()  # our own cancel(): the job ends normally, as cancelled
             await self._finish_cancelled(job, ctx)
         except _JobCancelled:
             await self._finish_cancelled(job, ctx)
-        except (StepFailedError, TranslatorError, EngineError) as exc:
+        except (StepFailedError, TranslatorError) as exc:
             # These messages are written by us for users: safe to forward.
-            await self._fail(job, ctx, str(exc))
+            await self._fail(job, ctx, str(exc), retryable=exc.retryable)
+        except EngineError as exc:
+            # Docker trouble (a pull, a startup timeout) usually passes: worth a retry.
+            await self._fail(job, ctx, str(exc), retryable=True)
         except Exception:
             # Full details (stack trace, paths, upstream errors) stay in server
             # logs. Clients get a generic message: internals never go on the wire.
             logger.exception("Job %s failed", job.id)
-            await self._fail(job, ctx, "Unexpected error. See server logs for details.")
+            await self._fail(
+                job, ctx, "Unexpected error. See server logs for details.", retryable=True
+            )
         else:
             job.status = JobStatus.SUCCEEDED
+            job.message = _success_message(job)
             self._bus.publish(
                 job.id,
                 EventType.JOB_SUCCEEDED,
-                _success_message(job),
+                job.message,
                 url=job.url,
                 urls=job.urls or None,
                 plan_id=job.plan_id if job.mode == "planning" else None,
@@ -530,11 +546,14 @@ class Orchestrator:
                 self._settings.job_retention_seconds, self._forget, job.id
             )
 
-    async def _fail(self, job: Job, ctx: StepContext | None, message: str) -> None:
+    async def _fail(
+        self, job: Job, ctx: StepContext | None, message: str, *, retryable: bool
+    ) -> None:
         # The rollback runs while the job is still RUNNING: the project stays reserved,
         # so no start or removal can race `compose down` and the workspace deletion.
         # The status flips before the terminal event, which the inventory cache relies on.
         job.finishing = True
+        job.retryable = retryable
         try:
             # Only a deployment rolls back: a failed stop or start never deletes an environment.
             if ctx is not None and job.stack is not None and job.mode in DEPLOY_MODES:
@@ -557,7 +576,8 @@ class Orchestrator:
         finally:
             job.status = JobStatus.CANCELLED
         logger.info("Job %s cancelled", job.id)
-        self._bus.publish(job.id, EventType.JOB_CANCELLED, _cancelled_message(job, rolled_back))
+        job.message = _cancelled_message(job, rolled_back)
+        self._bus.publish(job.id, EventType.JOB_CANCELLED, job.message)
 
     async def _report_unready_services(self, stack: StackHandle, ctx: StepContext) -> None:
         """Copy the last log lines of every service that did not become ready into the job,
@@ -606,7 +626,8 @@ class Orchestrator:
     def _publish_failure(self, job: Job, ctx: StepContext | None, message: str) -> None:
         if ctx is not None:
             ctx.emit(EventType.STEP_FAILED, f"[{ctx.index}/{ctx.total}] {ctx.step.label} failed")
-        self._bus.publish(job.id, EventType.JOB_FAILED, message)
+        job.message = message
+        self._bus.publish(job.id, EventType.JOB_FAILED, message, retryable=job.retryable)
 
     def _forget(self, job_id: UUID) -> None:
         self._jobs.pop(job_id, None)
@@ -668,7 +689,7 @@ class Orchestrator:
     async def _load_plan(self, ctx: StepContext) -> None:
         stored = self._plans.get(ctx.job.plan_id) if ctx.job.plan_id is not None else None
         if stored is None:
-            raise StepFailedError("This plan expired. Analyse the request again.")
+            raise StepFailedError("This plan expired. Analyse the request again.", retryable=False)
         ctx.job.template = stored.template
         # A private copy: the stored plan stays pristine for another deployment.
         ctx.job.candidate = replace(
@@ -704,7 +725,9 @@ class Orchestrator:
         ctx.log(f"Plan: {spec.title[:80]} - {spec.summary[:240]}")
 
         if spec.decision == "unsupported":
-            raise StepFailedError(f"This request cannot be deployed: {spec.explanation[:300]}")
+            raise StepFailedError(
+                f"This request cannot be deployed: {spec.explanation[:300]}", retryable=False
+            )
         if spec.decision == "template":
             template = self._catalog.get(spec.template_id or "")
             if template is None:
@@ -744,7 +767,9 @@ class Orchestrator:
         except ComposePolicyError as exc:
             for violation in exc.violations[:20]:
                 ctx.log(f"Rejected - {violation}")
-            raise StepFailedError("The stack was rejected by the security policy.") from None
+            raise StepFailedError(
+                "The stack was rejected by the security policy.", retryable=False
+            ) from None
 
         ctx.log(f"{len(compose.services)} service(s) passed the schema and policy checks")
         ctx.log("Allow-listed images: " + ", ".join(s.image for s in compose.services.values()))
@@ -935,7 +960,7 @@ class Orchestrator:
         environment must not depend on the file it is about to delete."""
         workspace = await asyncio.to_thread(self._workspaces.get, project)
         if workspace is None:
-            raise StepFailedError("This environment has no workspace.")
+            raise StepFailedError("This environment has no workspace.", retryable=False)
         services: object
         try:
             document = await asyncio.to_thread(self._workspaces.read_compose, project)

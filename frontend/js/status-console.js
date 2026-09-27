@@ -428,8 +428,13 @@ export class StatusConsole {
       if (outcome === "error" && this.#counts().failed) {
         children.push(el("p", { className: "hint", text: "The failed step is open below with its logs." }));
       }
+      if (outcome === "error" && event.retryable === false && this.#job?.mode === "planning") {
+        children.push(el("p", { className: "hint", text: "Change the request, then generate a new plan." }));
+      }
+      // A refusal (policy, unsupported request, expired plan) would fail again the same way:
+      // Retry is offered only when the server says the same request may succeed.
       const retry = this.#context.retry;
-      if (typeof retry === "function") {
+      if (typeof retry === "function" && (outcome === "cancelled" || event.retryable === true)) {
         const button = el("button", { className: "button primary", attrs: { type: "button" } }, [
           icon("retry"),
           el("span", { text: outcome === "cancelled" ? "Start again" : "Retry" }),

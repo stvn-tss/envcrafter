@@ -84,11 +84,21 @@ these rules.
 
 
 class TranslatorError(RuntimeError):
-    """Translation failed. The message is safe to show to users."""
+    """Translation failed. The message is safe to show to users. `retryable`: whether the
+    same request may succeed later without the user doing anything first."""
+
+    retryable = True
+
+    def __init__(self, message: str, *, retryable: bool | None = None) -> None:
+        super().__init__(message)
+        if retryable is not None:
+            self.retryable = retryable
 
 
 class KeyRejectedError(TranslatorError):
     """The API refused the key (or the configured model): retrying will not help."""
+
+    retryable = False
 
 
 class Translator(Protocol):
@@ -183,14 +193,14 @@ class LLMTranslator:
         except anthropic.APIStatusError as exc:
             if _is_billing_error(exc):
                 logger.warning("LLM API refused the request: the account has no credit left")
-                raise TranslatorError(_NO_CREDIT) from None
+                raise TranslatorError(_NO_CREDIT, retryable=False) from None
             logger.exception("LLM API error")
             raise TranslatorError("The LLM API returned an error.") from None
 
         # Check why generation stopped BEFORE reading content: a refusal or a
         # truncated answer may carry partial JSON that must never be used.
         if response.stop_reason == "refusal":
-            raise TranslatorError("The AI declined this request.")
+            raise TranslatorError("The AI declined this request.", retryable=False)
         if response.stop_reason != "end_turn":
             raise TranslatorError("The AI returned an incomplete plan.")
         text = "".join(block.text for block in response.content if block.type == "text")

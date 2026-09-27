@@ -183,6 +183,9 @@ class JobEvent(BaseModel):
     # Only on step.progress: 0-100, or None when the progress cannot be measured.
     percent: Annotated[int, Field(ge=0, le=100)] | None = None
     plan_id: UUID | None = None  # only on job.succeeded of planning jobs
+    # Only on job.failed: whether the same request may succeed if sent again (a refusal of
+    # the policy or of the AI will not).
+    retryable: bool | None = None
 
 
 class JobSummary(BaseModel):
@@ -196,6 +199,7 @@ class JobSummary(BaseModel):
     plan_id: UUID | None = None  # set by a succeeded "planning" job
     cancel_requested: bool = False  # a cancellation is under way
     service: str | None = None  # the one service a restart targets
+    retryable: bool | None = None  # set once the job failed, as on its job.failed event
     events_url: str
 
 

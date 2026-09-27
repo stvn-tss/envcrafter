@@ -8,9 +8,16 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.core.config import Settings
-from app.engine.base import LogSink, StackHandle
+from app.engine.base import EngineError, LogSink, ProgressSink, StackHandle
 from app.engine.simulated import SimulatedEngine
-from tests.conftest import ClientFactory, FakeTranslator, collect_events, run_job, spec
+from tests.conftest import (
+    ClientFactory,
+    FakeTranslator,
+    FlakyTranslator,
+    collect_events,
+    run_job,
+    spec,
+)
 
 DEPLOY_STEPS = [
     "security_validation",
@@ -49,6 +56,7 @@ def test_template_job_runs_every_step_and_writes_workspace(
 
     assert [step["key"] for step in events[0]["plan"]] == ["template_resolution", *DEPLOY_STEPS]
     assert events[-1]["type"] == "job.succeeded"
+    assert events[-1]["retryable"] is None  # only a failure says whether to retry
     assert events[-1]["url"] == "http://demo.localhost"
     seqs = [e["seq"] for e in events]
     assert seqs == sorted(set(seqs))  # strictly increasing (replays may skip coalesced progress)
@@ -148,6 +156,7 @@ def test_malicious_llm_output_is_rejected(
 
     assert events[-1]["type"] == "job.failed"
     assert events[-1]["message"] == "The stack was rejected by the security policy."
+    assert events[-1]["retryable"] is False  # the same stack would be rejected again
     assert expected in _logs(events)
 
 
@@ -157,6 +166,30 @@ def test_unsupported_request_fails_with_explanation(make_client: ClientFactory) 
 
     assert events[-1]["type"] == "job.failed"
     assert "Host access is not possible." in events[-1]["message"]
+    assert events[-1]["retryable"] is False
+
+
+def test_docker_failures_are_retryable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def broken_pull(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, progress: ProgressSink
+    ) -> None:
+        raise EngineError("`docker compose pull` failed (exit code 1)")
+
+    monkeypatch.setattr(SimulatedEngine, "pull", broken_pull)
+    events = run_job(client, {"mode": "template", "template_id": "dvwa"})
+
+    assert events[-1]["type"] == "job.failed"
+    assert events[-1]["retryable"] is True
+    assert client.get(f"/api/jobs/{events[0]['job_id']}").json()["retryable"] is True
+
+
+def test_transient_ai_errors_are_retryable(make_client: ClientFactory) -> None:
+    translator = FlakyTranslator(spec(decision="template", template_id="dvwa"))
+    events = run_job(make_client(translator), {"mode": "prompt", "prompt": "a lab"})
+
+    assert events[-1]["type"] == "job.failed"
+    assert events[-1]["message"] == "The LLM API is unreachable."
+    assert events[-1]["retryable"] is True
 
 
 def test_removal_deletes_the_workspace(client: TestClient, settings: Settings) -> None:
