@@ -625,6 +625,9 @@ class Orchestrator:
                 if job.request is not None and job.request.keep_on_failure:
                     await self._keep_failed(job.stack, ctx, message)
                     job.kept = True
+                    # The kept environment holds the name: the same request would be refused
+                    # or deploy a second copy. Starting the kept one is the retry.
+                    job.retryable = False
                 else:
                     await self._rollback(job.stack, ctx)
         finally:

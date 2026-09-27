@@ -178,6 +178,8 @@ def test_a_failed_deployment_can_be_kept_for_debugging(
     result = page.locator("#job-result")
     expect(result).to_contain_text("Kept for debugging")
     expect(result.get_by_role("button", name="Remove environment")).to_be_visible()
+    # The kept environment holds its name: Start it, or remove it, instead of a Retry.
+    expect(result.get_by_role("button", name="Retry")).to_have_count(0)
     row = page.locator(".environment", has=page.locator("code", has_text="shop"))
     expect(row.locator(".status-badge")).to_have_text("Failed", timeout=15_000)
     expect(row.locator(".environment-meta")).to_contain_text("kept for debugging")

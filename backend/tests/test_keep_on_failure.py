@@ -74,6 +74,22 @@ def test_a_failed_deployment_is_kept_when_asked(
     assert view["failure"]["message"] == events[-1]["message"]
 
 
+def test_a_kept_failure_is_not_offered_as_a_retry(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The kept environment holds its name: sending the same request again would be refused
+    (a chosen name) or deploy a second copy next to it. Its own Start is the retry."""
+    monkeypatch.setattr(SimulatedEngine, "start", broken_start)
+    monkeypatch.setattr(SimulatedEngine, "status", half_running)
+
+    events = run_job(client, {**LAB, "keep_on_failure": True})
+
+    assert events[-1]["kept"] is True
+    assert events[-1]["retryable"] is False
+    summary = client.get(f"/api/jobs/{events[-1]['job_id']}").json()
+    assert summary["retryable"] is False
+
+
 def test_without_the_option_a_failure_still_rolls_back(
     client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -83,6 +99,7 @@ def test_without_the_option_a_failure_still_rolls_back(
 
     assert events[-1]["type"] == "job.failed"
     assert events[-1]["kept"] is None
+    assert events[-1]["retryable"] is True  # nothing is left behind: the same request may work
     assert not (settings.workspaces_dir / "lab").exists()
 
 
