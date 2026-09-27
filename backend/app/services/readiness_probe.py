@@ -11,7 +11,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar, cast
 
-from app.engine.base import Engine, HostResources, RuntimeCheck
+from app.engine.base import Engine, EngineError, HostResources, RuntimeCheck
 
 T = TypeVar("T")
 
@@ -34,19 +34,25 @@ class ReadinessProbe:
         """Docker and reverse-proxy checks, and the resources left."""
         return await self._cached("system", self._read_system)
 
-    async def template(self, template_id: str, images: Sequence[str]) -> tuple[int, HostResources]:
-        """How many of the template's images are missing, and the resources left."""
+    async def template(
+        self, template_id: str, images: Sequence[str]
+    ) -> tuple[int | None, HostResources]:
+        """How many of the template's images are missing (None: Docker cannot tell), and the
+        resources left."""
         return await self._cached(f"template:{template_id}", lambda: self._read_template(images))
 
     async def _read_system(self) -> tuple[list[RuntimeCheck], HostResources]:
         runtime, resources = await asyncio.gather(self._engine.diagnose(), self._engine.resources())
         return list(runtime), resources
 
-    async def _read_template(self, images: Sequence[str]) -> tuple[int, HostResources]:
-        missing, resources = await asyncio.gather(
-            self._engine.missing_images(images), self._engine.resources()
-        )
-        return len(missing), resources
+    async def _read_template(self, images: Sequence[str]) -> tuple[int | None, HostResources]:
+        return await asyncio.gather(self._count_missing(images), self._engine.resources())
+
+    async def _count_missing(self, images: Sequence[str]) -> int | None:
+        try:
+            return len(await self._engine.missing_images(images))
+        except EngineError:
+            return None
 
     async def _cached(self, key: str, read: Callable[[], Awaitable[T]]) -> T:
         lock = self._locks.setdefault(key, asyncio.Lock())

@@ -1,11 +1,12 @@
 import os
+from collections.abc import Sequence
 from typing import Literal
 
 import pytest
 from axe_playwright_python.sync_playwright import Axe
 from playwright.sync_api import Page, expect
 
-from app.engine.base import HostResources
+from app.engine.base import EngineError, HostResources
 from app.engine.simulated import SimulatedEngine
 from tests.conftest import FakeTranslator
 from tests.ui.conftest import LiveServer
@@ -275,6 +276,23 @@ def test_template_dialog_shows_what_the_deployment_needs(
 
     page.get_by_role("button", name="Details of Media Stack").click()
     expect(dialog).to_contain_text("All 5 images are already downloaded")
+    assert errors == []
+
+
+def test_an_unknown_download_is_not_announced_as_a_full_one(
+    page: Page, live_server: LiveServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unreachable(self: SimulatedEngine, images: Sequence[str]) -> list[str]:
+        raise EngineError("Docker does not answer.")
+
+    monkeypatch.setattr(SimulatedEngine, "missing_images", unreachable)
+    errors = open_home(page, live_server)
+    page.get_by_role("button", name="Details of Media Stack").click()
+    first = page.locator("#template-dialog .readiness-list li").first
+
+    expect(first).to_have_text("Download size unknown: Docker does not answer")
+    expect(first).to_have_attribute("data-tone", "info")
+    expect(page.locator("#template-dialog .readiness-list")).not_to_contain_text("to download")
     assert errors == []
 
 

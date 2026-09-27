@@ -37,19 +37,24 @@ def template_images(template: Template) -> list[str]:
 
 
 def template_readiness(
-    template: Template, missing: int, resources: HostResources
+    template: Template, missing: int | None, resources: HostResources
 ) -> TemplateReadiness:
-    """`missing`: how many of the template's images are not downloaded yet. The download
-    left is estimated in proportion to them: the manifest only knows the total."""
+    """`missing`: how many of the template's images are not downloaded yet, None when Docker
+    cannot tell. The download left is estimated in proportion to them: the manifest only
+    knows the total."""
     footprint = template.manifest.footprint
     total = len(template_images(template))
-    download = math.ceil(footprint.download_mb * missing / total) if total else 0
+    download: int | None = None
+    if missing is not None:
+        download = math.ceil(footprint.download_mb * missing / total) if total else 0
     warnings: list[ReadinessWarning] = []
     available = resources.memory_available_mb
     if available is not None and available < footprint.memory_mb:
         warnings.append("memory")
     disk = resources.disk_free_mb
-    if disk is not None and disk < download * DISK_EXPANSION + DISK_MARGIN_MB:
+    # Unknown values never warn: without the download left, disk room proves nothing.
+    needed = None if download is None else download * DISK_EXPANSION + DISK_MARGIN_MB
+    if disk is not None and needed is not None and disk < needed:
         warnings.append("disk")
     return TemplateReadiness(
         template_id=template.manifest.id,

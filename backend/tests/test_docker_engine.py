@@ -184,6 +184,25 @@ async def test_start_still_raises_when_traefik_cannot_be_attached_after_up(
     ]
 
 
+@pytest.mark.anyio
+async def test_restarting_one_service_reattaches_the_reverse_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control plane may have recreated Traefik since the environment started: a
+    restart of its web service alone must route it again, like a full start does."""
+    engine = _engine()
+    recorder = _Recorder([""])  # the network exists, Traefik lost its attachment
+    _wire(engine, recorder, monkeypatch)
+
+    await engine.start(_stack(tmp_path), lambda _message: None, service="sonarr")
+
+    assert recorder.calls == [
+        "docker network inspect",
+        "docker network connect",
+        "docker compose up",
+    ]
+
+
 def test_log_lines_are_parsed_and_sanitized() -> None:
     # \u202e is RIGHT-TO-LEFT OVERRIDE: written as an escape, never as a literal
     # character, so this source file never carries a raw bidi control point.
@@ -304,6 +323,8 @@ async def test_one_service_is_stopped_and_started_alone(
         runs.append(args)
 
     monkeypatch.setattr(engine, "_run", run)
+    # The start checks the reverse proxy first: Traefik is still attached here.
+    monkeypatch.setattr(engine, "_capture", _Recorder(["envcrafter-traefik "]).capture)
     await engine.stop(_stack(tmp_path), lambda _line: None, service="sonarr")
     await engine.start(_stack(tmp_path), lambda _line: None, service="sonarr")
 
@@ -321,15 +342,51 @@ async def test_missing_images_inspects_each_reference_once(
     engine = _engine()
     asked: list[list[str]] = []
 
-    async def succeeds(args: list[str], *, timeout: float) -> bool:  # noqa: ASYNC109
+    async def exit_status(args: list[str], *, timeout: float) -> tuple[int, str]:  # noqa: ASYNC109
         asked.append(args)
-        return args[-1].startswith("docker.io/library/mariadb")
+        if args[-1].startswith("docker.io/library/mariadb"):
+            return 0, ""
+        return 1, f"Error response from daemon: No such image: {args[-1]}"
 
-    monkeypatch.setattr(engine, "_succeeds", succeeds)
+    monkeypatch.setattr(engine, "_exit_status", exit_status)
     glpi, mariadb = "docker.io/glpi/glpi:11.0.9", "docker.io/library/mariadb:11.4.13"
 
     assert await engine.missing_images([glpi, mariadb, glpi]) == [glpi]
     assert [args[:4] for args in asked] == [["image", "inspect", "--format", "{{.Id}}"]] * 2
+
+
+@pytest.mark.anyio
+async def test_missing_images_raises_when_docker_does_not_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = _engine()
+
+    async def exit_status(args: list[str], *, timeout: float) -> tuple[int, str]:  # noqa: ASYNC109
+        return 1, "Cannot connect to the Docker daemon at tcp://socket-proxy-api:2375."
+
+    monkeypatch.setattr(engine, "_exit_status", exit_status)
+
+    with pytest.raises(EngineError):
+        await engine.missing_images(["docker.io/library/mariadb:11.4.13"])
+
+
+@pytest.mark.anyio
+async def test_a_missing_docker_cli_is_reported_not_raised(tmp_path: Path) -> None:
+    engine = DockerComposeEngine(
+        docker_binary=str(tmp_path / "no-docker-here"),
+        docker_host="tcp://socket-proxy-api:2375",
+        traefik_container="envcrafter-traefik",
+        pull_timeout=10,
+        start_timeout=30,
+        stop_timeout=10,
+        disk_path=tmp_path,
+    )
+
+    checks = await engine.diagnose()
+
+    assert [(check.name, check.ok) for check in checks] == [("docker", False), ("proxy", False)]
+    with pytest.raises(EngineError):
+        await engine.missing_images(["docker.io/library/mariadb:11.4.13"])
 
 
 @pytest.mark.anyio

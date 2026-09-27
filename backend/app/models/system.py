@@ -31,8 +31,8 @@ class SystemView(BaseModel):
 class TemplateReadiness(BaseModel):
     template_id: str
     images_total: int
-    images_missing: int
-    download_mb: int  # estimated download left: 0 when every image is already local
+    images_missing: int | None  # None: Docker cannot tell
+    download_mb: int | None  # estimated download left: 0 when every image is already local
     memory_mb: int
     first_start_seconds: int
     resources: ResourcesView

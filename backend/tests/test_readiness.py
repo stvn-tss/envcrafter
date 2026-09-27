@@ -1,12 +1,13 @@
 """Readiness: what a deployment needs (capacity check) and whether the machine is set up."""
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
-from app.engine.base import HostResources, RuntimeCheck
+from app.engine.base import EngineError, HostResources, RuntimeCheck
 from app.engine.host import read_host_resources
 from app.engine.simulated import SimulatedEngine
 from tests.conftest import ClientFactory, run_job
@@ -59,6 +60,27 @@ def test_enough_room_raises_no_warning(client: TestClient, monkeypatch: pytest.M
 
     monkeypatch.setattr(SimulatedEngine, "resources", roomy)
     assert client.get("/api/templates/media-stack/readiness").json()["warnings"] == []
+
+
+def test_readiness_says_unknown_when_docker_cannot_tell(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docker down must not read as "every image is missing": that would announce a full
+    download and a disk warning built on nothing."""
+
+    async def unreachable(self: SimulatedEngine, images: Sequence[str]) -> list[str]:
+        raise EngineError("Docker does not answer.")
+
+    monkeypatch.setattr(SimulatedEngine, "missing_images", unreachable)
+
+    response = client.get("/api/templates/glpi/readiness")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["images_total"] == 2
+    assert body["images_missing"] is None
+    assert body["download_mb"] is None
+    assert "disk" not in body["warnings"]
 
 
 def test_readiness_input_validation(client: TestClient) -> None:

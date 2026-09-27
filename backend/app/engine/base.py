@@ -86,7 +86,8 @@ class Engine(Protocol):
         ...
 
     async def missing_images(self, images: Sequence[str]) -> list[str]:
-        """The given image references that are not in the local image store yet."""
+        """The given image references that are not in the local image store yet. Raises
+        EngineError when Docker cannot tell."""
         ...
 
     async def resources(self) -> HostResources:

@@ -30,7 +30,7 @@ function line(text, tone = "ok") {
 /** Lines of the capacity check, for the template dialog. */
 export function readinessItems(readiness) {
   const total = count(readiness?.images_total) ?? 0;
-  const missing = count(readiness?.images_missing) ?? 0;
+  const missing = count(readiness?.images_missing); // null: Docker cannot tell
   const download = count(readiness?.download_mb) ?? 0;
   const memory = count(readiness?.memory_mb);
   const available = count(readiness?.resources?.memory_available_mb);
@@ -40,9 +40,11 @@ export function readinessItems(readiness) {
   const images = (n) => (n === 1 ? "image" : "images");
 
   const items = [
-    line(missing === 0
-      ? `All ${total} ${images(total)} ${total === 1 ? "is" : "are"} already downloaded`
-      : `About ${formatSize(download)} to download (${missing} of ${total} ${images(total)})`),
+    missing === null
+      ? line("Download size unknown: Docker does not answer", "info")
+      : line(missing === 0
+        ? `All ${total} ${images(total)} ${total === 1 ? "is" : "are"} already downloaded`
+        : `About ${formatSize(download)} to download (${missing} of ${total} ${images(total)})`),
   ];
   if (memory !== null) {
     const short = warnings.has("memory") && available !== null;
@@ -66,7 +68,7 @@ export function readinessItems(readiness) {
     }
   }
   if (start !== null) {
-    items.push(line(missing ? `Ready about ${duration(start)} after the download` : `Ready in about ${duration(start)}`));
+    items.push(line(missing === 0 ? `Ready in about ${duration(start)}` : `Ready about ${duration(start)} after the download`));
   }
   return [el("ul", { className: "readiness-list" }, items)];
 }

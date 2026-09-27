@@ -18,6 +18,7 @@ import re
 from collections.abc import AsyncGenerator, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from app.engine.base import (
     EngineError,
@@ -115,29 +116,16 @@ class DockerComposeEngine:
             log(f"Reverse proxy attached to {stack.edge_network}")
 
     async def start(self, stack: StackHandle, log: LogSink, *, service: str | None = None) -> None:
+        args = ["up", "--detach", "--wait", "--wait-timeout", str(self._start_timeout)]
         if service is not None:
-            # One service of an existing environment: its networks and the reverse proxy
-            # attachment are already in place.
-            await self._run(
-                self._compose(
-                    stack,
-                    "up",
-                    "--detach",
-                    "--wait",
-                    "--wait-timeout",
-                    str(self._start_timeout),
-                    "--no-deps",
-                    _checked_service(service),
-                ),
-                log,
-                timeout=self._start_timeout + 60,
-            )
-            return
+            # One service of an existing environment: the others keep their state.
+            args += ["--no-deps", _checked_service(service)]
         # The edge network may not exist yet: `docker network inspect` then fails, but
         # that must not fail the job, since `compose up` below (re)creates the network
         # (for instance after it was removed by an external `docker compose down`). Only
         # attach Traefik up front when the network already exists; otherwise attach it
-        # right after `up`, once the network is guaranteed to be there.
+        # right after `up`, once the network is guaranteed to be there. A restart of one
+        # service checks it too: the control plane may have recreated Traefik meanwhile.
         attached = False
         if stack.edge_network:
             try:
@@ -145,13 +133,7 @@ class DockerComposeEngine:
                 attached = True
             except EngineError:
                 log(f"{stack.edge_network} not found yet; `docker compose up` will create it")
-        await self._run(
-            self._compose(
-                stack, "up", "--detach", "--wait", "--wait-timeout", str(self._start_timeout)
-            ),
-            log,
-            timeout=self._start_timeout + 60,
-        )
+        await self._run(self._compose(stack, *args), log, timeout=self._start_timeout + 60)
         if stack.edge_network and not attached:
             await self._ensure_routing(stack.edge_network, log)
 
@@ -232,9 +214,8 @@ class DockerComposeEngine:
     async def logs(
         self, stack: StackHandle, service: str, *, tail: int
     ) -> AsyncGenerator[LogLine, None]:
-        process = await asyncio.create_subprocess_exec(
-            self._docker,
-            *self._compose(
+        process = await self._spawn(
+            self._compose(
                 stack,
                 "logs",
                 "--no-color",
@@ -245,14 +226,12 @@ class DockerComposeEngine:
                 "--follow",
                 service,
             ),
-            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             # Kept apart from stdout: the compose CLI's own warnings and errors (upstream
             # messages, socket-proxy addresses, file paths) are for the server log only,
             # never for the browser. Drained concurrently so a chatty stderr can never
             # fill its pipe buffer and stall the container output this generator yields.
             stderr=asyncio.subprocess.PIPE,
-            env=self._environment(),
             limit=1024 * 1024,
         )
         stderr_task = asyncio.create_task(_drain_stderr(process, stack.project, service))
@@ -280,13 +259,21 @@ class DockerComposeEngine:
 
     async def missing_images(self, images: Sequence[str]) -> list[str]:
         unique = list(dict.fromkeys(images))
-        present = await asyncio.gather(
-            *(
-                self._succeeds(["image", "inspect", "--format", "{{.Id}}", image], timeout=10)
-                for image in unique
-            )
-        )
+        present = await asyncio.gather(*(self._image_present(image) for image in unique))
         return [image for image, found in zip(unique, present, strict=True) if not found]
+
+    async def _image_present(self, image: str) -> bool:
+        """True when the image is in the local store, False when Docker says it is not.
+        Anything else (Docker unreachable, timeout) raises EngineError: "unknown" must never
+        read as "missing", or a stopped Docker would announce a full download."""
+        code, stderr = await self._exit_status(
+            ["image", "inspect", "--format", "{{.Id}}", image], timeout=10
+        )
+        if code == 0:
+            return True
+        if "no such image" in stderr.lower():
+            return False
+        raise EngineError("Docker does not answer.")
 
     async def resources(self) -> HostResources:
         return await asyncio.to_thread(read_host_resources, self._disk_path)
@@ -339,36 +326,43 @@ class DockerComposeEngine:
                 env[key] = os.environ[key]
         return env
 
-    async def _succeeds(self, args: list[str], *, timeout: float) -> bool:  # noqa: ASYNC109
-        """Run a read-only docker command; True when it exits with 0. Output is discarded."""
-        process = await asyncio.create_subprocess_exec(
-            self._docker,
-            *args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=self._environment(),
+    async def _spawn(self, args: Sequence[str], **kwargs: Any) -> asyncio.subprocess.Process:
+        """Start the docker CLI. A missing or broken binary is an EngineError like any other
+        Docker failure, so diagnose() and the readiness checks report it."""
+        try:
+            return await asyncio.create_subprocess_exec(
+                self._docker,
+                *args,
+                stdin=asyncio.subprocess.DEVNULL,
+                env=self._environment(),
+                **kwargs,
+            )
+        except OSError:
+            logger.exception("Cannot start the docker CLI")
+            raise EngineError("The docker CLI cannot be started.") from None
+
+    async def _exit_status(self, args: list[str], *, timeout: float) -> tuple[int, str]:  # noqa: ASYNC109
+        """Run a read-only docker command: (exit code, start of its stderr). Standard output
+        is discarded; a timeout raises EngineError."""
+        process = await self._spawn(
+            args, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
         )
         try:
             async with asyncio.timeout(timeout):
-                return await process.wait() == 0
+                _, stderr = await process.communicate()
         except TimeoutError:
-            return False
+            raise EngineError(f"`{_describe(args)}` timed out after {int(timeout)}s") from None
         finally:
             if process.returncode is None:
                 process.kill()
                 await process.wait()
+        return process.returncode or 0, stderr[:2000].decode("utf-8", "replace")
 
     async def _capture(self, args: list[str], *, timeout: float) -> str:  # noqa: ASYNC109
         """Run a read-only docker command and return its standard output, truncated to
         1 MiB after capture (`communicate()` buffers the whole output first)."""
-        process = await asyncio.create_subprocess_exec(
-            self._docker,
-            *args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._environment(),
+        process = await self._spawn(
+            args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         try:
             async with asyncio.timeout(timeout):
@@ -395,13 +389,10 @@ class DockerComposeEngine:
         timeout: float,  # noqa: ASYNC109
         on_line: Callable[[str], None] | None = None,
     ) -> None:
-        process = await asyncio.create_subprocess_exec(
-            self._docker,
-            *args,
-            stdin=asyncio.subprocess.DEVNULL,
+        process = await self._spawn(
+            args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=self._environment(),
             limit=1024 * 1024,
         )
         try:
