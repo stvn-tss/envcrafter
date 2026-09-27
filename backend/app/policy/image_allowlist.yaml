@@ -81,7 +81,9 @@ images:
 
   - ref: docker.io/bkimminich/juice-shop:v20.2.0
     title: OWASP Juice Shop 20
-    description: Intentionally insecure web shop (OWASP Top 10 training). No configuration.
+    description: >-
+      Intentionally insecure web shop (OWASP Top 10 training). NODE_ENV selects a
+      configuration: default, tutorial or ctf.
     web_port: 3000
     vulnerable: true
 

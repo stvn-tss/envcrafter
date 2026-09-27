@@ -130,6 +130,22 @@ def test_the_dialog_announces_the_next_free_name(page: Page, live_server: LiveSe
     assert errors == []
 
 
+def test_template_options_are_sent_with_the_deployment(page: Page, live_server: LiveServer) -> None:
+    errors = open_home(page, live_server)
+    page.get_by_role("button", name="Details of DVWA").click()
+    level = page.get_by_label("Security level")
+    expect(level).to_have_value("low")
+    assert serious_violations(page) == []
+    level.select_option("high")
+
+    with page.expect_request("**/api/jobs") as request:
+        page.locator("#dialog-deploy").click()
+
+    assert request.value.post_data_json["parameters"] == {"SECURITY_LEVEL": "high"}
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+    assert errors == []
+
+
 def test_theme_can_be_pinned_in_settings(page: Page, live_server: LiveServer) -> None:
     page.emulate_media(color_scheme="light")
     open_home(page, live_server)

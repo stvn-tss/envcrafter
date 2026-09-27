@@ -133,7 +133,8 @@ class WorkspaceManager:
         return updated
 
     def read_secret_values(self, project: str) -> list[str]:
-        """Blocking. Generated secret values of a project, only to redact them from logs.
+        """Blocking. Generated secret values of a project, only to redact them from logs:
+        built-in variables and template parameters are not secrets.
 
         Fails closed: only a missing `.env` (a legacy workspace) means "no secrets". Any
         other error propagates, so logs are never streamed without their redaction."""
@@ -141,10 +142,13 @@ class WorkspaceManager:
             text = (self._path_for(project) / ENV_FILE).read_text(encoding="utf-8")
         except FileNotFoundError:
             return []
+        meta = self.read_meta(project)
+        # Without a readable meta.json, parameter values are redacted too: safe side.
+        skipped = BUILTIN_VARIABLES | set(meta.parameters if meta is not None else ())
         values: list[str] = []
         for line in text.splitlines():
             key, separator, value = line.partition("=")
-            if separator and key not in BUILTIN_VARIABLES and len(value) >= 8:
+            if separator and key not in skipped and len(value) >= 8:
                 values.append(value)
         return values
 

@@ -18,9 +18,10 @@ export class TemplateDetails {
   #accessSection = null;
   #readiness = null;
   #readinessRequest = 0;
+  #parameterInputs = new Map(); // parameter name -> () => value
 
   /**
-   * @param {{ onDeploy: (template: object, projectName: string | null) => Promise<string | null>,
+   * @param {{ onDeploy: (template: object, projectName: string | null, options: { parameters: object }) => Promise<string | null>,
    *           categoryLabel: (id: string) => string,
    *           fetchReadiness: (templateId: string) => Promise<object>,
    *           takenNames: () => Set<string> }} options
@@ -68,6 +69,7 @@ export class TemplateDetails {
       ]),
     );
     this.#accessSection = el("div");
+    const parameters = Array.isArray(template.parameters) ? template.parameters : [];
     this.body.replaceChildren(
       el("p", { className: "dialog-description", text: template.description }),
       ...(isVulnerable(template) ? [vulnerableCallout()] : []),
@@ -75,6 +77,7 @@ export class TemplateDetails {
       section("Web access", this.#accessSection),
       section("Network", networkSummary(template.needs_internet)),
       section("Persistent storage", volumesList(template.volumes)),
+      ...(parameters.length ? [section("Options", this.#renderParameters(parameters))] : []),
       section("Before you deploy", this.#readiness = el("div", { className: "readiness", attrs: { "aria-live": "polite" } }, [
         el("p", { className: "hint", text: "Checking this machine…" }),
       ])),
@@ -87,6 +90,39 @@ export class TemplateDetails {
     this.body.scrollTop = 0;
     this.deployButton.focus();
     this.#loadReadiness(template);
+  }
+
+  /** One control per template parameter (a list, or a checkbox for a boolean), set to its default. */
+  #renderParameters(parameters) {
+    this.#parameterInputs = new Map();
+    const rows = parameters.map((parameter) => {
+      const id = `parameter-${parameter.name}`;
+      const hint = parameter.description ? [el("p", { className: "field-hint", text: parameter.description })] : [];
+      if (parameter.type === "boolean") {
+        const input = el("input", { attrs: { type: "checkbox", id } });
+        input.checked = parameter.default === true;
+        this.#parameterInputs.set(parameter.name, () => input.checked);
+        return el("div", { className: "parameter" }, [
+          el("label", { className: "check-field", attrs: { for: id } }, [input, el("span", { text: parameter.label })]),
+          ...hint,
+        ]);
+      }
+      const options = Array.isArray(parameter.options) ? parameter.options : [];
+      const select = el("select", { className: "input", attrs: { id } },
+        options.map((option) => el("option", { text: option.label, attrs: { value: option.value } })));
+      select.value = parameter.default;
+      this.#parameterInputs.set(parameter.name, () => select.value);
+      return el("div", { className: "field parameter" }, [
+        el("label", { text: parameter.label, attrs: { for: id } }),
+        select,
+        ...hint,
+      ]);
+    });
+    return el("div", { className: "parameter-list" }, rows);
+  }
+
+  #parameterValues() {
+    return Object.fromEntries([...this.#parameterInputs].map(([name, read]) => [name, read()]));
   }
 
   /** The capacity check of this machine, or the manifest footprint if it cannot be read. */
@@ -150,7 +186,7 @@ export class TemplateDetails {
     if (!this.#template || projectNameProblem(name) !== null || this.deployButton.disabled) return;
     this.#hideError();
     this.deployButton.disabled = true;
-    const error = await this.onDeploy(this.#template, name || null);
+    const error = await this.onDeploy(this.#template, name || null, { parameters: this.#parameterValues() });
     this.deployButton.disabled = false;
     if (error) {
       this.error.replaceChildren(icon("alert"), el("span", { text: error }));

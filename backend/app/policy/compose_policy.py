@@ -64,6 +64,8 @@ class PolicyContext:
     allow_egress: bool
     # Names of the per-project secrets that `${NAME}` may reference.
     secret_names: frozenset[str] = frozenset()
+    # Names of the template parameters `${NAME}` may reference (values chosen at deployment).
+    parameter_names: frozenset[str] = frozenset()
 
 
 # --- 1. Explicit deny rules -----------------------------------------------------
@@ -310,7 +312,7 @@ _INTERPOLATION_FIELDS_RE = re.compile(
 def _check_interpolation(
     document: dict[Any, Any], context: PolicyContext
 ) -> Iterator[PolicyViolation]:
-    allowed_names = BUILTIN_VARIABLES | context.secret_names
+    allowed_names = BUILTIN_VARIABLES | context.secret_names | context.parameter_names
     for path, value in _walk_strings(document):
         text = value.replace("$$", "")  # `$$` is Compose's escape for a literal `$`
         if "$" not in text:
@@ -330,6 +332,15 @@ def _check_interpolation(
                 )
             elif name not in allowed_names:
                 yield PolicyViolation(path, f"unknown variable ${{{name}}}")
+
+
+def referenced_variables(document: object) -> set[str]:
+    """Every `${NAME}` (or `$NAME`) referenced in a compose source document."""
+    names: set[str] = set()
+    for _path, value in _walk_strings(document):
+        for match in _INTERPOLATION_RE.finditer(value.replace("$$", "")):
+            names.add(match.group("braced") or match.group("bare") or "")
+    return names
 
 
 _BIND_SOURCE_RE = re.compile(r"^\./[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")

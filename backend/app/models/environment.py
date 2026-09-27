@@ -15,7 +15,7 @@ from app.models.common import (
     reject_invisible_characters,
     reject_line_breaks,
 )
-from app.models.template import ServiceName
+from app.models.template import ParameterValue, SecretName, ServiceName
 
 DisplayName = Annotated[str, StringConstraints(min_length=1, max_length=60)]
 # Written by the user from the environment drawer: rendered with textContent only.
@@ -61,6 +61,8 @@ class EnvironmentMeta(StrictModel):
     urls: list[WebEndpoint] = Field(default_factory=list, max_length=6)
     volumes: list[str] = Field(default_factory=list, max_length=16)
     notes: Annotated[str, StringConstraints(max_length=2000)] = ""
+    # Template parameters chosen at deployment (name -> value), shown in the drawer.
+    parameters: dict[SecretName, ParameterValue] = Field(default_factory=dict, max_length=8)
 
 
 class EnvironmentUpdate(StrictModel):
@@ -114,6 +116,7 @@ class EnvironmentView(BaseModel):
     volumes: list[str]
     job: ActiveJobRef | None  # the job running on this environment, if any
     notes: str = ""  # written by the user
+    parameters: dict[str, str] = Field(default_factory=dict)  # chosen at deployment
 
 
 class EnvironmentListResponse(BaseModel):

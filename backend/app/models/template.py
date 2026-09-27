@@ -7,9 +7,16 @@ A template lives in `templates/<category>/<id>/` and has two files:
 
 import re
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, Field, StringConstraints, WithJsonSchema
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    Field,
+    StringConstraints,
+    WithJsonSchema,
+    model_validator,
+)
 
 from app.models.common import StrictModel, TemplateId
 
@@ -82,6 +89,47 @@ class TemplateFootprint(StrictModel):
     first_start_seconds: Annotated[int, Field(ge=1, le=3600)]  # started -> healthy, cached images
 
 
+# A parameter value lands in the workspace .env as NAME=value: this alphabet keeps it one
+# inert line (no newline, `=`, `$`, quote or space).
+PARAMETER_VALUE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+ParameterValue = Annotated[str, StringConstraints(pattern=PARAMETER_VALUE_PATTERN)]
+
+
+class ParameterOption(StrictModel):
+    value: ParameterValue
+    label: ShortText
+
+
+class _Parameter(StrictModel):
+    # Same rules as secret names: an .env variable, EC_ reserved.
+    name: SecretName
+    label: ShortText
+    description: Annotated[str, StringConstraints(max_length=200)] = ""
+
+
+class EnumParameter(_Parameter):
+    type: Literal["enum"]
+    options: list[ParameterOption] = Field(min_length=2, max_length=12)
+    default: ParameterValue
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "EnumParameter":
+        values = [option.value for option in self.options]
+        if len(set(values)) != len(values):
+            raise ValueError("option values must be unique")
+        if self.default not in values:
+            raise ValueError("the default must be one of the options")
+        return self
+
+
+class BooleanParameter(_Parameter):
+    type: Literal["boolean"]
+    default: bool = False
+
+
+TemplateParameter = Annotated[EnumParameter | BooleanParameter, Field(discriminator="type")]
+
+
 class TemplateManifest(StrictModel):
     id: TemplateId
     name: ShortText
@@ -94,6 +142,9 @@ class TemplateManifest(StrictModel):
     expose: list[ExposedPort] = Field(min_length=1, max_length=6)
     # Random values generated per project into the workspace .env file.
     secrets: list[SecretName] = Field(default_factory=list)
+    # Options chosen before deploying, written to the workspace .env: reference them as
+    # ${NAME} in compose.yaml.
+    parameters: list[TemplateParameter] = Field(default_factory=list, max_length=8)
     needs_internet: bool = False
     access_notes: list[Annotated[str, StringConstraints(max_length=300)]] = Field(
         default_factory=list
@@ -131,6 +182,7 @@ class TemplateView(BaseModel):
     vulnerable: bool  # at least one image is flagged `vulnerable` in the allow-list
     footprint: TemplateFootprint
     logo_url: str | None
+    parameters: list[TemplateParameter]
 
 
 class CategoryInfo(BaseModel):

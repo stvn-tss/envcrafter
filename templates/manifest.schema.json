@@ -1,6 +1,95 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$defs": {
+    "BooleanParameter": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^(?!EC_)[A-Z][A-Z0-9_]{2,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Description",
+          "type": "string"
+        },
+        "type": {
+          "const": "boolean",
+          "title": "Type",
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean",
+          "default": false,
+          "title": "Default"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "type"
+      ],
+      "title": "BooleanParameter",
+      "type": "object"
+    },
+    "EnumParameter": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^(?!EC_)[A-Z][A-Z0-9_]{2,63}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Description",
+          "type": "string"
+        },
+        "type": {
+          "const": "enum",
+          "title": "Type",
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/ParameterOption"
+          },
+          "maxItems": 12,
+          "minItems": 2,
+          "title": "Options",
+          "type": "array"
+        },
+        "default": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "title": "Default"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "type",
+        "options",
+        "default"
+      ],
+      "title": "EnumParameter",
+      "type": "object"
+    },
     "ExposedPort": {
       "additionalProperties": false,
       "properties": {
@@ -21,6 +110,28 @@
         "port"
       ],
       "title": "ExposedPort",
+      "type": "object"
+    },
+    "ParameterOption": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+          "title": "Value",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ],
+      "title": "ParameterOption",
       "type": "object"
     },
     "TemplateCategory": {
@@ -145,6 +256,28 @@
         "type": "string"
       },
       "title": "Secrets",
+      "type": "array"
+    },
+    "parameters": {
+      "items": {
+        "discriminator": {
+          "mapping": {
+            "boolean": "#/$defs/BooleanParameter",
+            "enum": "#/$defs/EnumParameter"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/$defs/EnumParameter"
+          },
+          {
+            "$ref": "#/$defs/BooleanParameter"
+          }
+        ]
+      },
+      "maxItems": 8,
+      "title": "Parameters",
       "type": "array"
     },
     "needs_internet": {

@@ -32,7 +32,7 @@ import asyncio
 import copy
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -169,6 +169,8 @@ class Job:
     # Settings never swaps it under a running analysis.
     translator: Translator | None = None
     service: str | None = None  # the one service a restart targets
+    # Template parameters resolved at submission (template mode): name -> .env value.
+    parameters: dict[str, str] = field(default_factory=dict)
     status: JobStatus = JobStatus.QUEUED
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     url: str | None = None
@@ -336,11 +338,14 @@ class Orchestrator:
         """
         template: Template | None = None
         stored: StoredPlan | None = None
+        parameters: dict[str, str] = {}
         if isinstance(request, TemplateDeploymentRequest):
             # Allow-list lookup: the id never touches the filesystem directly.
             template = self._catalog.get(request.template_id)
             if template is None:
                 raise UnknownTemplateError(request.template_id)
+            # Checked before anything is reserved: a bad choice is a 422, not a failed job.
+            parameters = template.parameter_values(request.parameters)
         elif isinstance(request, PlanDeploymentRequest):
             stored = self._plans.get(request.plan_id)
             if stored is None:
@@ -358,6 +363,7 @@ class Orchestrator:
             prompt=request.prompt if isinstance(request, PromptDeploymentRequest) else None,
             plan_id=stored.view.plan_id if stored is not None else None,
             translator=self._translator if isinstance(request, PromptDeploymentRequest) else None,
+            parameters=parameters,
         )
         if request.project_name is not None:
             await self._reserve(job, must_exist=False)
@@ -724,6 +730,7 @@ class Orchestrator:
             ],
             urls=self._endpoints(blueprint, project),
             volumes=sorted(blueprint.compose.volumes),
+            parameters=dict(blueprint.parameters),
         )
 
     # --- Step handlers ------------------------------------------------------------
@@ -732,7 +739,7 @@ class Orchestrator:
         template = ctx.job.template
         if template is None:
             raise RuntimeError("template job without a resolved template")
-        self._use_template(ctx, template)
+        self._use_template(ctx, template, ctx.job.parameters)
 
     async def _load_plan(self, ctx: StepContext) -> None:
         stored = self._plans.get(ctx.job.plan_id) if ctx.job.plan_id is not None else None
@@ -744,13 +751,28 @@ class Orchestrator:
             stored.candidate,
             source=copy.deepcopy(stored.candidate.source),
             service_names=dict(stored.candidate.service_names),
+            parameters=dict(stored.candidate.parameters),
         )
         ctx.log(f"Plan '{stored.view.title}' loaded ({len(stored.view.services)} service(s))")
 
-    def _use_template(self, ctx: StepContext, template: Template) -> None:
+    def _use_template(
+        self, ctx: StepContext, template: Template, parameters: Mapping[str, str] | None = None
+    ) -> None:
+        """`parameters`: values chosen with a template request; a template the AI picked
+        takes the defaults."""
         manifest = template.manifest
         ctx.log(f"Template '{manifest.name}' ({manifest.category.value})")
         ctx.log("Components: " + ", ".join(component.name for component in manifest.components))
+        values = dict(parameters) if parameters is not None else template.parameter_values({})
+        labels = {parameter.name: parameter.label for parameter in manifest.parameters}
+        if values:
+            ctx.log(
+                "Options: "
+                + ", ".join(
+                    f"{labels[name]}: {template.option_label(name, value)}"
+                    for name, value in values.items()
+                )
+            )
         ctx.job.template = template
         ctx.job.candidate = Candidate(
             title=manifest.name,
@@ -760,6 +782,7 @@ class Orchestrator:
             secrets=tuple(manifest.secrets),
             service_names={c.service: c.name for c in manifest.components},
             template_id=manifest.id,
+            parameters=values,
         )
 
     async def _translate(self, ctx: StepContext) -> None:
@@ -828,6 +851,7 @@ class Orchestrator:
             secrets=candidate.secrets,
             service_names=dict(candidate.service_names),
             template_id=candidate.template_id,
+            parameters=dict(candidate.parameters),
         )
         online = [name for name, s in compose.services.items() if "egress" in s.networks]
         ctx.log(
@@ -917,6 +941,7 @@ class Orchestrator:
             "EC_PROJECT": project,
             "EC_HOSTNAME": web_hostname(project, domain),
             "EC_TZ": self._timezone(ctx),
+            **blueprint.parameters,
             **WorkspaceManager.generate_secrets(blueprint.secrets),
         }
         workspace = await self._workspaces.create(

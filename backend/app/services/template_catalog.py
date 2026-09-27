@@ -6,6 +6,7 @@ can never be offered to users.
 """
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.models.template import (
+    BooleanParameter,
     ComponentView,
     TemplateCategory,
     TemplateManifest,
@@ -22,6 +24,7 @@ from app.policy.compose_policy import (
     ComposePolicyError,
     ComposeSpec,
     PolicyContext,
+    referenced_variables,
     validate_compose,
 )
 from app.policy.images import ImageAllowlist, parse_image_ref
@@ -34,6 +37,10 @@ _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 class TemplateCatalogError(ValueError):
     """The catalog on disk is inconsistent; the app refuses to start."""
+
+
+class InvalidParametersError(ValueError):
+    """A parameter choice the template does not offer. The message is safe to show."""
 
 
 @dataclass(frozen=True)
@@ -92,7 +99,38 @@ class Template:
             vulnerable=self.vulnerable,
             footprint=self.manifest.footprint,
             logo_url=f"/api/templates/{self.manifest.id}/logo" if self.logo is not None else None,
+            parameters=list(self.manifest.parameters),
         )
+
+    def parameter_values(self, chosen: Mapping[str, bool | str]) -> dict[str, str]:
+        """Every parameter as written to the workspace .env: the chosen value, else the
+        default. Raises InvalidParametersError for an unknown name or a value not offered."""
+        declared = {parameter.name: parameter for parameter in self.manifest.parameters}
+        unknown = sorted(set(chosen) - set(declared))
+        if unknown:
+            raise InvalidParametersError(f"This template has no parameter {unknown[0]}.")
+        values: dict[str, str] = {}
+        for name, parameter in declared.items():
+            value = chosen.get(name, parameter.default)
+            if isinstance(parameter, BooleanParameter):
+                if not isinstance(value, bool):
+                    raise InvalidParametersError(f"{parameter.label} must be true or false.")
+                values[name] = "true" if value else "false"
+                continue
+            offered = [option.value for option in parameter.options]
+            if isinstance(value, bool) or value not in offered:
+                raise InvalidParametersError(
+                    f"{parameter.label} must be one of: {', '.join(offered)}."
+                )
+            values[name] = value
+        return values
+
+    def option_label(self, name: str, value: str) -> str:
+        """How the UI names a parameter value ("High" for DVWA's level `high`)."""
+        for parameter in self.manifest.parameters:
+            if parameter.name == name and not isinstance(parameter, BooleanParameter):
+                return next((o.label for o in parameter.options if o.value == value), value)
+        return value
 
 
 class TemplateCatalog:
@@ -134,6 +172,16 @@ def load_template(manifest_path: Path, allowlist: ImageAllowlist) -> Template:
         )
     if manifest.category == TemplateCategory.SECURITY_LAB and manifest.needs_internet:
         raise TemplateCatalogError(f"{manifest.id}: lab templates never get Internet access")
+    parameters = [parameter.name for parameter in manifest.parameters]
+    if len(set(parameters)) != len(parameters) or set(parameters) & set(manifest.secrets):
+        raise TemplateCatalogError(
+            f"{manifest.id}: parameter names must be unique and differ from secret names"
+        )
+    unused = sorted(set(parameters) - referenced_variables(compose_source))
+    if unused:
+        raise TemplateCatalogError(
+            f"{manifest.id}: parameter {unused[0]} is not used in compose.yaml"
+        )
 
     try:
         compose = validate_compose(compose_source, _policy_context(manifest, allowlist))
@@ -178,6 +226,7 @@ def _policy_context(manifest: TemplateManifest, allowlist: ImageAllowlist) -> Po
         allowlist=allowlist,
         allow_egress=manifest.needs_internet,
         secret_names=frozenset(manifest.secrets),
+        parameter_names=frozenset(parameter.name for parameter in manifest.parameters),
     )
 
 

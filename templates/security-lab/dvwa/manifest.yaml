@@ -21,10 +21,21 @@ expose:
   - service: dvwa
     port: 80
 secrets: [DB_PASSWORD, DB_ROOT_PASSWORD]
+parameters:
+  - type: enum
+    name: SECURITY_LEVEL
+    label: Security level
+    description: Level of new sessions. Change it at any time in DVWA Security.
+    options:
+      - {value: low, label: Low}
+      - {value: medium, label: Medium}
+      - {value: high, label: High}
+      - {value: impossible, label: Impossible}
+    default: low
 needs_internet: false
 access_notes:
   - "First visit: open Setup / Reset DB and click Create / Reset Database, then log in with admin / password."
-  - The default security level is low; change it in DVWA Security.
+  - New sessions start at the security level chosen when deploying; change it in DVWA Security.
 tags: [dvwa, owasp, pentest, vulnerable, php, sqli, xss, csrf]
 footprint:
   download_mb: 318

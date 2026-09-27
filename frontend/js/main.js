@@ -93,7 +93,7 @@ const removeDialog = new RemoveDialog(document.querySelector("#remove-dialog"), 
 });
 const logsDialog = new LogsDialog(document.querySelector("#logs-dialog"));
 const details = new TemplateDetails(document.querySelector("#template-dialog"), {
-  onDeploy: (template, projectName) => deployTemplate(template, projectName),
+  onDeploy: (template, projectName, options) => deployTemplate(template, projectName, options),
   categoryLabel,
   fetchReadiness,
   takenNames: () => takenNames(),
@@ -267,9 +267,10 @@ async function resumeJob() {
   }
 }
 
-function deployTemplate(template, projectName = null) {
+function deployTemplate(template, projectName = null, { parameters = {} } = {}) {
   const payload = withTimezone({ mode: "template", template_id: template.id });
   if (projectName) payload.project_name = projectName;
+  if (Object.keys(parameters).length) payload.parameters = parameters;
   return run(() => createJob(payload), { title: template.name, template });
 }
 

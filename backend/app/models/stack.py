@@ -20,6 +20,8 @@ class StackBlueprint:
     # Display name of each service ("MariaDB 11.4 LTS"), for the UI and meta.json.
     service_names: Mapping[str, str] = field(default_factory=dict)
     template_id: str | None = None
+    # Template parameters as written to the workspace .env (name -> value).
+    parameters: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def uses_egress(self) -> bool:
@@ -38,3 +40,4 @@ class Candidate:
     # Display name per service, shown in the UI and recorded in meta.json.
     service_names: dict[str, str] = field(default_factory=dict)
     template_id: str | None = None
+    parameters: dict[str, str] = field(default_factory=dict)

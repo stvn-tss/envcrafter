@@ -637,6 +637,8 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 .field-hint[data-invalid] { color: var(--danger); }
 
 .check-list, .readiness-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.parameter-list { display: grid; gap: 12px; }
+.parameter-list .field { max-width: none; }
 .check-list li {
   display: grid; grid-template-columns: 16px max-content minmax(0, 1fr); align-items: baseline; gap: 4px 10px;
   font-size: var(--text-md);

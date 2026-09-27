@@ -14,6 +14,7 @@ from pydantic import (
     BaseModel,
     Field,
     RootModel,
+    StrictBool,
     StringConstraints,
     model_validator,
 )
@@ -27,7 +28,7 @@ from app.models.common import (
     reject_invisible_characters,
 )
 from app.models.environment import WebEndpoint
-from app.models.template import ServiceName
+from app.models.template import ParameterValue, SecretName, ServiceName
 
 # --- Requests -----------------------------------------------------------------
 
@@ -52,6 +53,11 @@ class TemplateDeploymentRequest(StrictModel):
     template_id: TemplateId
     project_name: ProjectName | None = None
     timezone: TimeZoneName | None = None
+    # Values of the template's parameters (see its manifest), checked against the catalog
+    # when the job is submitted; omitted ones take their default.
+    parameters: dict[SecretName, StrictBool | ParameterValue] = Field(
+        default_factory=dict, max_length=8
+    )
 
 
 class PromptDeploymentRequest(StrictModel):

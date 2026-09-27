@@ -9,7 +9,7 @@ services:
       DB_DATABASE: dvwa
       DB_USER: dvwa
       DB_PASSWORD: ${DB_PASSWORD}
-      DEFAULT_SECURITY_LEVEL: low
+      DEFAULT_SECURITY_LEVEL: ${SECURITY_LEVEL}
     depends_on:
       mariadb:
         condition: service_healthy

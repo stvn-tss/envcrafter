@@ -3,6 +3,9 @@
 services:
   juice-shop:
     image: bkimminich/juice-shop:v20.2.0
+    environment:
+      # Selects config/<mode>.yml in the image: default, tutorial or ctf.
+      NODE_ENV: ${JUICE_SHOP_MODE}
     healthcheck:
       # Distroless image (no shell, no curl): probe with the bundled Node.
       test:

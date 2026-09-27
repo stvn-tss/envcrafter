@@ -52,6 +52,7 @@ from app.services.readiness import (
     template_images,
     template_readiness,
 )
+from app.services.template_catalog import InvalidParametersError
 from app.translator.client import KeyRejectedError, TranslatorError
 
 router = APIRouter(prefix="/api")
@@ -170,6 +171,8 @@ async def create_job(payload: DeploymentRequest, orchestrator: OrchestratorDep) 
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown template") from None
     except UnknownPlanError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown or expired plan") from None
+    except InvalidParametersError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from None
     except ProjectNameConflictError:
         raise HTTPException(status.HTTP_409_CONFLICT, "This project name is already used") from None
     except TranslatorUnavailableError:

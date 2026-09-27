@@ -18,6 +18,18 @@ expose:
   - service: juice-shop
     port: 3000
 secrets: []
+parameters:
+  - type: enum
+    name: JUICE_SHOP_MODE
+    label: Mode
+    description: >-
+      Tutorials first opens the guided challenges. Capture the flag shows a flag code for
+      each solved challenge, hides the hints and enables every challenge.
+    options:
+      - {value: default, label: Standard}
+      - {value: tutorial, label: Tutorials first}
+      - {value: ctf, label: Capture the flag}
+    default: default
 needs_internet: false
 access_notes:
   - Finding the scoreboard is the first challenge.

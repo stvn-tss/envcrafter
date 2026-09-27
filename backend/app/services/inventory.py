@@ -158,6 +158,7 @@ class EnvironmentInventory:
             volumes=list(meta.volumes) if meta is not None else [],
             job=_job_ref(job) if job is not None else None,
             notes=meta.notes if meta is not None else "",
+            parameters=dict(meta.parameters) if meta is not None else {},
         )
 
     @staticmethod
