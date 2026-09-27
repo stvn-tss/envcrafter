@@ -1,6 +1,7 @@
 /**
  * Error notifications for actions whose origin is no longer on screen (a card's
- * Deploy button, a copy). Errors tied to a form are shown inline instead.
+ * Deploy button, a copy), and the undo notice of a delayed removal. Errors tied to a
+ * form are shown inline instead.
  */
 import { el } from "./dom.js";
 import { icon } from "./icons.js";
@@ -38,6 +39,39 @@ export function showToast(message) {
   toast.addEventListener("focusout", arm);
 
   region.append(toast);
-  while (region.childElementCount > MAX_TOASTS) region.firstElementChild.remove();
+  // Notices (an undo countdown) are never evicted: dropping one would silently cancel it.
+  const errors = [...region.querySelectorAll(".toast:not(.notice)")];
+  for (const old of errors.slice(0, Math.max(0, errors.length - MAX_TOASTS))) old.remove();
   arm();
+}
+
+/**
+ * A notice with an Undo button and a countdown. Resolves true once the time ran out (go
+ * ahead), false when the user undid it: nothing is sent to the server before that.
+ */
+export function showUndo(message, seconds) {
+  return new Promise((resolve) => {
+    const region = document.querySelector("#toasts");
+    if (!region) {
+      resolve(true);
+      return;
+    }
+    let left = seconds;
+    const text = el("p", { text: `${message} in ${left} s` });
+    const undo = el("button", { className: "button small", text: "Undo", attrs: { type: "button" } });
+    const toast = el("div", { className: "toast notice", attrs: { role: "status" } }, [icon("info"), text, undo]);
+    const timer = window.setInterval(() => {
+      left -= 1;
+      if (left > 0) text.textContent = `${message} in ${left} s`;
+      else finish(true);
+    }, 1000);
+    function finish(proceed) {
+      window.clearInterval(timer);
+      toast.remove();
+      resolve(proceed);
+    }
+    undo.addEventListener("click", () => finish(false));
+    region.append(toast);
+    undo.focus();
+  });
 }

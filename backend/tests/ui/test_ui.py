@@ -184,6 +184,33 @@ def test_a_failed_deployment_can_be_kept_for_debugging(
     assert errors == []
 
 
+def test_a_disposable_lab_is_removed_after_a_short_undo_window(
+    page: Page, live_server: LiveServer
+) -> None:
+    errors = open_home(page, live_server)
+    deploy_template(page, "OWASP Juice Shop", "shop")
+    expect(page.locator("#status-badge")).to_have_text("Ready", timeout=20_000)
+    row = page.locator(".environment", has=page.locator("code", has_text="shop"))
+    dialog = page.locator("#remove-dialog")
+
+    row.get_by_role("button", name="Remove shop").click()
+    expect(dialog.locator("#remove-confirm")).to_be_hidden()
+    expect(dialog).to_contain_text("A disposable lab")
+    assert serious_violations(page) == []
+    dialog.get_by_role("button", name="Remove environment").click()
+    notice = page.locator(".toast.notice")
+    expect(notice).to_contain_text("Removing shop in")
+    notice.get_by_role("button", name="Undo").click()
+    expect(notice).to_have_count(0)
+    page.wait_for_timeout(6_000)  # longer than the undo window: nothing was sent
+    expect(row).to_be_visible()
+
+    row.get_by_role("button", name="Remove shop").click()
+    dialog.get_by_role("button", name="Remove environment").click()
+    expect(row).to_have_count(0, timeout=20_000)
+    assert errors == []
+
+
 def test_theme_can_be_pinned_in_settings(page: Page, live_server: LiveServer) -> None:
     page.emulate_media(color_scheme="light")
     open_home(page, live_server)

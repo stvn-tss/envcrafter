@@ -458,7 +458,11 @@ export class StatusConsole {
       if (keptProject) {
         const template = this.#context.template ?? null;
         const remove = el("button", { className: "button danger", text: "Remove environment", attrs: { type: "button" } });
-        remove.addEventListener("click", () => this.onRemove({ project: keptProject, volumes: template ? template.volumes : null }));
+        remove.addEventListener("click", () => this.onRemove({
+          project: keptProject,
+          volumes: template ? template.volumes : null,
+          disposable: template?.disposable === true,
+        }));
         actions.push(remove);
       }
       if (actions.length) children.push(el("div", { className: "result-actions" }, actions));
@@ -496,7 +500,11 @@ export class StatusConsole {
       }, [el("span", { text: "Open environment" }), icon("external")]));
     }
     const remove = el("button", { className: "button danger", text: "Remove environment", attrs: { type: "button" } });
-    remove.addEventListener("click", () => this.onRemove({ project, volumes: template ? template.volumes : null }));
+    remove.addEventListener("click", () => this.onRemove({
+      project,
+      volumes: template ? template.volumes : null,
+      disposable: template?.disposable === true,
+    }));
     actions.push(remove);
     children.push(el("div", { className: "result-actions" }, actions));
     return children;

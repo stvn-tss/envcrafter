@@ -33,6 +33,8 @@ parameters:
       - {value: impossible, label: Impossible}
     default: low
 needs_internet: false
+# Lab data only: removal asks for a simple confirmation.
+disposable: true
 access_notes:
   - "First visit: open Setup / Reset DB and click Create / Reset Database, then log in with admin / password."
   - New sessions start at the security level chosen when deploying; change it in DVWA Security.

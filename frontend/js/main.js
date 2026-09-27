@@ -18,7 +18,7 @@ import { RemoveDialog } from "./remove-dialog.js";
 import { SettingsDialog } from "./settings-dialog.js";
 import { STATUS, StatusConsole } from "./status-console.js";
 import { TemplateDetails } from "./template-details.js";
-import { showToast } from "./toasts.js";
+import { showToast, showUndo } from "./toasts.js";
 
 const BASE_TITLE = document.title;
 const statusPanel = document.querySelector("#status-panel");
@@ -88,8 +88,16 @@ const statusConsole = new StatusConsole(statusPanel, {
     }
   },
 });
+// A disposable lab is removed after a few seconds, unless the user undoes it meanwhile.
+const UNDO_SECONDS = 5;
 const removeDialog = new RemoveDialog(document.querySelector("#remove-dialog"), {
-  onConfirm: (project) => run(() => removeEnvironment(project), {}),
+  onConfirm: async (project, { disposable = false } = {}) => {
+    if (!disposable) return run(() => removeEnvironment(project), {});
+    if (!(await showUndo(`Removing ${project}`, UNDO_SECONDS))) return null; // undone
+    const error = await run(() => removeEnvironment(project), {});
+    if (error) showToast(error);
+    return null;
+  },
 });
 const logsDialog = new LogsDialog(document.querySelector("#logs-dialog"));
 const details = new TemplateDetails(document.querySelector("#template-dialog"), {

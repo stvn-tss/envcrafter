@@ -31,6 +31,8 @@ parameters:
       - {value: ctf, label: Capture the flag}
     default: default
 needs_internet: false
+# Lab data only (reset at each restart anyway): removal asks for a simple confirmation.
+disposable: true
 access_notes:
   - Finding the scoreboard is the first challenge.
   - Data is reset every time the container restarts.

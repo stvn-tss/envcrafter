@@ -757,6 +757,7 @@ class Orchestrator:
             urls=self._endpoints(blueprint, project),
             volumes=sorted(blueprint.compose.volumes),
             parameters=dict(blueprint.parameters),
+            disposable=job.template.manifest.disposable if job.template else False,
         )
 
     # --- Step handlers ------------------------------------------------------------

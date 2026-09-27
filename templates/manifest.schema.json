@@ -285,6 +285,11 @@
       "title": "Needs Internet",
       "type": "boolean"
     },
+    "disposable": {
+      "default": false,
+      "title": "Disposable",
+      "type": "boolean"
+    },
     "access_notes": {
       "items": {
         "maxLength": 300,

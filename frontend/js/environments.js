@@ -156,7 +156,11 @@ export class EnvironmentsPanel {
       stop: button("Stop", (env) => this.#act(project, "stop", env)),
       start: button("Start", (env) => this.#act(project, "start", env)),
       restart: button("Restart", (env) => this.#act(project, "restart", env)),
-      remove: button("Remove", (env) => this.handlers.onRemove({ project: env.project, volumes: Array.isArray(env.volumes) ? env.volumes : null }), "button small danger"),
+      remove: button("Remove", (env) => this.handlers.onRemove({
+        project: env.project,
+        volumes: Array.isArray(env.volumes) ? env.volumes : null,
+        disposable: env.disposable === true,
+      }), "button small danger"),
     };
     for (const [key, label] of [["progress", "View progress of"], ["logs", "Logs of"], ["stop", "Stop"], ["start", "Start"], ["restart", "Restart"], ["remove", "Remove"]]) {
       parts[key].setAttribute("aria-label", `${label} ${project}`);

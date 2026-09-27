@@ -1,14 +1,20 @@
 /**
  * Removal confirmation. Removing deletes data volumes, so the dialog lists what
- * goes away and asks for the project name to be typed before it can proceed.
+ * goes away and asks for the project name to be typed before it can proceed. A
+ * disposable lab (flagged by its template) only needs a click: the caller then leaves a
+ * few seconds to undo before anything is sent.
  */
 import { el } from "./dom.js";
 import { icon } from "./icons.js";
 
 export class RemoveDialog {
   #project = null;
+  #disposable = false;
 
-  /** @param {{ onConfirm: (project: string) => Promise<string | null> }} options resolves with an error message */
+  /**
+   * @param {{ onConfirm: (project: string, options: { disposable: boolean }) => Promise<string | null> }} options
+   *   resolves with an error message (a disposable removal is not awaited)
+   */
   constructor(dialog, { onConfirm }) {
     this.dialog = dialog;
     this.title = dialog.querySelector("#remove-title");
@@ -17,6 +23,8 @@ export class RemoveDialog {
     this.input = dialog.querySelector("#remove-confirm");
     this.submit = dialog.querySelector("#remove-submit");
     this.error = dialog.querySelector("#remove-error");
+    this.confirmField = dialog.querySelector("#remove-confirm-field");
+    this.disposableNote = dialog.querySelector("#remove-disposable-note");
 
     for (const button of dialog.querySelectorAll("[data-close]")) {
       button.addEventListener("click", () => dialog.close());
@@ -27,9 +35,14 @@ export class RemoveDialog {
     dialog.querySelector("#remove-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!this.#confirmed() || this.submit.disabled) return;
+      if (this.#disposable) {
+        dialog.close();
+        onConfirm(this.#project, { disposable: true }); // the undo notice takes over
+        return;
+      }
       this.error.hidden = true;
       this.submit.disabled = true;
-      const error = await onConfirm(this.#project);
+      const error = await onConfirm(this.#project, { disposable: false });
       if (error) {
         this.error.replaceChildren(icon("alert"), el("span", { text: error }));
         this.error.hidden = false;
@@ -40,9 +53,10 @@ export class RemoveDialog {
     });
   }
 
-  /** @param {{ project: string, volumes: string[] | null }} target volumes is null when unknown */
-  open({ project, volumes }) {
+  /** @param {{ project: string, volumes: string[] | null, disposable?: boolean }} target volumes is null when unknown */
+  open({ project, volumes, disposable = false }) {
     this.#project = project;
+    this.#disposable = disposable === true;
     this.title.textContent = `Remove ${project}?`;
     const items = [el("li", { text: "its containers and networks" })];
     if (volumes === null) {
@@ -64,13 +78,15 @@ export class RemoveDialog {
       el("span", { text: " to confirm" }),
     );
     this.input.value = "";
-    this.submit.disabled = true;
+    this.confirmField.hidden = this.#disposable;
+    this.disposableNote.hidden = !this.#disposable;
+    this.submit.disabled = !this.#disposable;
     this.error.hidden = true;
     this.dialog.showModal();
-    this.input.focus();
+    (this.#disposable ? this.submit : this.input).focus();
   }
 
   #confirmed() {
-    return this.input.value.trim() === this.#project;
+    return this.#disposable || this.input.value.trim() === this.#project;
   }
 }

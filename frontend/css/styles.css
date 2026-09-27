@@ -576,6 +576,15 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 }
 .toast > .icon { width: 18px; height: 18px; margin-top: 3px; color: var(--danger); }
 .toast p { margin: 3px 0 0; }
+/* An undo countdown: information, not an error. */
+.toast.notice {
+  align-items: center;
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.toast.notice > .icon { margin-top: 0; color: var(--accent); }
+.toast.notice p { margin: 0; font-variant-numeric: tabular-nums; }
+.remove-note { margin: 10px 0 0; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: 0.3; } }

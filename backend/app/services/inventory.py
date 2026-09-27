@@ -167,6 +167,7 @@ class EnvironmentInventory:
             notes=meta.notes if meta is not None else "",
             parameters=dict(meta.parameters) if meta is not None else {},
             failure=meta.failure if meta is not None else None,
+            disposable=meta.disposable if meta is not None else False,
         )
 
     @staticmethod

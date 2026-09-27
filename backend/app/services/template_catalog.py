@@ -100,6 +100,7 @@ class Template:
             footprint=self.manifest.footprint,
             logo_url=f"/api/templates/{self.manifest.id}/logo" if self.logo is not None else None,
             parameters=list(self.manifest.parameters),
+            disposable=self.manifest.disposable,
         )
 
     def parameter_values(self, chosen: Mapping[str, bool | str]) -> dict[str, str]:

@@ -25,6 +25,31 @@ def _meta(settings: Settings, project: str) -> dict[str, Any]:
     return meta
 
 
+def test_disposable_labs_are_flagged_from_catalog_to_environment(
+    client: TestClient, settings: Settings
+) -> None:
+    """A disposable lab holds nothing worth keeping: its removal asks for less."""
+    templates = {t["id"]: t for t in client.get("/api/templates").json()["templates"]}
+    assert templates["dvwa"]["disposable"] is True
+    assert templates["owasp-juice-shop"]["disposable"] is True
+    assert templates["glpi"]["disposable"] is False
+
+    run_job(client, {"mode": "template", "template_id": "owasp-juice-shop", "project_name": "shop"})
+    run_job(client, {"mode": "template", "template_id": "glpi", "project_name": "desk"})
+
+    assert _meta(settings, "shop")["disposable"] is True
+    assert _meta(settings, "desk")["disposable"] is False
+    assert client.get("/api/environments/shop").json()["disposable"] is True
+    assert client.get("/api/environments/desk").json()["disposable"] is False
+
+
+def test_custom_ai_stacks_are_never_disposable(make_client: ClientFactory) -> None:
+    translator = FakeTranslator(spec(services=[BOOKS], expose={"service": "books", "port": 80}))
+    client = make_client(translator)
+    run_job(client, {"mode": "prompt", "prompt": "books", "project_name": "books"})
+    assert client.get("/api/environments/books").json()["disposable"] is False
+
+
 def test_template_deployment_records_metadata_and_every_url(
     client: TestClient, settings: Settings
 ) -> None:

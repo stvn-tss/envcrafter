@@ -146,6 +146,9 @@ class TemplateManifest(StrictModel):
     # ${NAME} in compose.yaml.
     parameters: list[TemplateParameter] = Field(default_factory=list, max_length=8)
     needs_internet: bool = False
+    # Nothing in it is worth keeping (a lab reset by design): removing it asks for a
+    # simple confirmation instead of typing its name.
+    disposable: bool = False
     access_notes: list[Annotated[str, StringConstraints(max_length=300)]] = Field(
         default_factory=list
     )
@@ -183,6 +186,7 @@ class TemplateView(BaseModel):
     footprint: TemplateFootprint
     logo_url: str | None
     parameters: list[TemplateParameter]
+    disposable: bool
 
 
 class CategoryInfo(BaseModel):

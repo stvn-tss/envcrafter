@@ -72,6 +72,8 @@ class EnvironmentMeta(StrictModel):
     parameters: dict[SecretName, ParameterValue] = Field(default_factory=dict, max_length=8)
     # Set when a failed deployment was kept for debugging, until a full start succeeds.
     failure: DeploymentFailure | None = None
+    # From the template: nothing in it is worth keeping, removal asks for less.
+    disposable: bool = False
 
 
 class EnvironmentUpdate(StrictModel):
@@ -128,6 +130,7 @@ class EnvironmentView(BaseModel):
     notes: str = ""  # written by the user
     parameters: dict[str, str] = Field(default_factory=dict)  # chosen at deployment
     failure: DeploymentFailure | None = None  # a failed deployment kept for debugging
+    disposable: bool = False  # removal asks for a simple confirmation
 
 
 class EnvironmentListResponse(BaseModel):
