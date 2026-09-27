@@ -119,6 +119,59 @@ def test_plans_survive_a_restart(settings: Settings) -> None:
         assert _finish(second, job.json())[-1]["type"] == "job.succeeded"
 
 
+BOOKS = spec(
+    title="Books",
+    summary="An audiobook server.",
+    services=[
+        {
+            "name": "books",
+            "image": "docker.io/advplyr/audiobookshelf:2.36.1",
+            "purpose": "Audiobooks",
+            "environment": [],
+            "volumes": [{"name": "config", "mount_path": "/config"}],
+            "depends_on": [],
+            "needs_internet": False,
+        }
+    ],
+    expose={"service": "books", "port": 80},
+)
+
+
+def test_a_plan_with_many_secrets_is_kept_across_a_restart(settings: Settings) -> None:
+    """The stored record accepts whatever the pipeline accepts: no limit of its own."""
+    many = BOOKS.model_copy(update={"secrets": [f"SECRET_{index}" for index in range(17)]})
+    translator = FakeTranslator(many)
+    keyed = settings.model_copy(update={"llm_api_key": TEST_API_KEY})
+
+    with TestClient(create_app(keyed, lambda key: translator)) as first:
+        planning = first.post("/api/plans", json={"prompt": "books"}, headers=ORIGIN)
+        done = _finish(first, planning.json())[-1]
+        assert done["type"] == "job.succeeded", done["message"]
+
+    with TestClient(create_app(keyed, lambda key: translator)) as second:
+        plan = second.get(f"/api/plans/{done['plan_id']}")
+        assert plan.status_code == 200, plan.text
+        assert plan.json()["secrets"] == 17
+
+
+def test_a_plan_the_history_cannot_keep_still_reaches_review(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """History is best effort: a plan it cannot record stays reviewable from memory."""
+
+    def unrecordable(plan: object) -> str:
+        raise ValueError("this plan does not fit the stored record")
+
+    monkeypatch.setattr("app.services.orchestrator.plan_body", unrecordable)
+    translator = FakeTranslator(BOOKS)
+    keyed = settings.model_copy(update={"llm_api_key": TEST_API_KEY})
+    with TestClient(create_app(keyed, lambda key: translator)) as client:
+        planning = client.post("/api/plans", json={"prompt": "books"}, headers=ORIGIN)
+        done = _finish(client, planning.json())[-1]
+        assert done["type"] == "job.succeeded", done["message"]
+        assert client.get(f"/api/plans/{done['plan_id']}").status_code == 200
+
+
 @pytest.mark.anyio
 async def test_a_job_cut_short_by_a_crash_is_marked_interrupted(tmp_path: Path) -> None:
     path = tmp_path / "history.sqlite3"

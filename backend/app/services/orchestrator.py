@@ -929,7 +929,13 @@ class Orchestrator:
         )
         self._plans.add(stored)
         # Kept on disk too: a restart of the server within the review window keeps it.
-        await self._history.save_plan(view.plan_id, expires_at, plan_body(stored))
+        # Best effort like the rest of the history: the plan stays reviewable from memory.
+        try:
+            body = plan_body(stored)
+        except ValueError:
+            logger.warning("Plan %s is kept in memory only", view.plan_id, exc_info=True)
+        else:
+            await self._history.save_plan(view.plan_id, expires_at, body)
         ctx.job.plan_id = view.plan_id
         ctx.log(f"Plan kept for review until {expires_at:%H:%M} UTC")
 

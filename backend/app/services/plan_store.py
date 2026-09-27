@@ -84,7 +84,8 @@ class _CandidateRecord(_Record):
     title: Annotated[str, StringConstraints(min_length=1, max_length=80)]
     source: dict[str, Any]
     expose: list[ExposedPort] = Field(max_length=6)
-    secrets: list[SecretName] = Field(max_length=16)
+    # No count limit: the record accepts every stack the pipeline accepts.
+    secrets: list[SecretName]
     parameters: dict[SecretName, ParameterValue] = Field(default_factory=dict, max_length=8)
     service_names: dict[ServiceName, Annotated[str, StringConstraints(max_length=80)]]
     allow_egress: bool
