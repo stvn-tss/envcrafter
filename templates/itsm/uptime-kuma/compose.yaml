@@ -1,0 +1,21 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+# Egress: monitors reach the sites and services they check.
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:2.5.5-slim-rootless
+    environment:
+      # SQLite, set here: the first visit skips the database choice.
+      UPTIME_KUMA_DB_TYPE: sqlite
+      TZ: ${EC_TZ}
+    volumes:
+      - kuma-data:/app/data
+    networks: [internal, egress]
+    healthcheck:
+      test: ["CMD-SHELL", "extra/healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 1m
+
+volumes:
+  kuma-data:

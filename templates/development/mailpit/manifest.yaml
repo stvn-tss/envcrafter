@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../../manifest.schema.json
+id: mailpit
+name: Mailpit
+category: development
+summary: A mailbox that catches the e-mails an application sends, with a web UI and an API.
+description: >-
+  Mailpit accepts every e-mail sent to its SMTP port and shows it in a web UI (HTML and
+  source views, attachments, link check) instead of delivering it. Its API can inject
+  test messages. Each environment has its own network, so other environments cannot
+  reach its SMTP port: stacks that send mail bring their own Mailpit, like Forgejo.
+components:
+  - service: mailpit
+    name: Mailpit 1.31
+    role: SMTP catcher, web UI and API.
+expose:
+  - service: mailpit
+    port: 8025
+secrets: []
+needs_internet: false
+# Test mail only, kept in memory: removal asks for a simple confirmation.
+disposable: true
+access_notes:
+  - "No account: the mailbox opens directly."
+  - "Send a test message from this machine with its API: POST http://<project>.localhost/api/v1/send (documented in the web UI)."
+  - Messages are kept in memory and cleared when the container restarts.
+tags: [mail, smtp, email, testing, developer, catcher]
+footprint:
+  download_mb: 14
+  memory_mb: 30
+  first_start_seconds: 10

@@ -21,6 +21,7 @@
   --cat-itsm: #6d8cff;
   --cat-media: #b58cff;
   --cat-security: #ff8a5c;
+  --cat-development: #3fc1b0;
   --radius: 12px;
   --radius-sm: 8px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -55,6 +56,7 @@
     --cat-itsm: #2f47c6;
     --cat-media: #7338cc;
     --cat-security: #a93d0d;
+    --cat-development: #115e59;
     --shadow: 0 6px 24px rgb(18 24 38 / 0.14);
     --shadow-sm: 0 2px 8px rgb(18 24 38 / 0.18);
   }
@@ -77,6 +79,7 @@
   --cat-itsm: #2f47c6;
   --cat-media: #7338cc;
   --cat-security: #a93d0d;
+  --cat-development: #115e59;
   --shadow: 0 6px 24px rgb(18 24 38 / 0.14);
   --shadow-sm: 0 2px 8px rgb(18 24 38 / 0.18);
 }
@@ -301,6 +304,7 @@ textarea:disabled { opacity: 0.6; cursor: not-allowed; }
 [data-category="itsm"] { --cat: var(--cat-itsm); }
 [data-category="media"] { --cat: var(--cat-media); }
 [data-category="security-lab"] { --cat: var(--cat-security); }
+[data-category="development"] { --cat: var(--cat-development); }
 
 /* Placeholder for the application logo: initials tinted with the category color. */
 .monogram {

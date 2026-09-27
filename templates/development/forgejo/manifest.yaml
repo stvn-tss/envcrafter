@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=../../manifest.schema.json
+id: forgejo
+name: Forgejo
+category: development
+summary: Self-hosted Git forge with issues, pull requests and a wiki, and a mailbox for its e-mails.
+description: >-
+  Forgejo hosts Git repositories with issues, pull requests, a wiki and packages, on
+  PostgreSQL. Its e-mails (sign-up, notifications) are caught by Mailpit instead of
+  being sent: read them in the second web UI. Isolated network, no Internet access:
+  clone and push over HTTP from this machine.
+components:
+  - service: forgejo
+    name: Forgejo 16
+    role: Git forge and web UI (repositories, issues, pull requests).
+  - service: postgres
+    name: PostgreSQL 18
+    role: Database of Forgejo.
+  - service: mailpit
+    name: Mailpit 1.31
+    role: Catches the e-mails Forgejo sends.
+expose:
+  - service: forgejo
+    port: 3000
+  - service: mailpit
+    port: 8025
+secrets: [DB_PASSWORD, SECRET_KEY]
+needs_internet: false
+access_notes:
+  - "Register the first account: it becomes the administrator."
+  - "Clone over HTTP from this machine: git clone http://<project>.localhost/<user>/<repository>.git"
+  - "E-mails sent by Forgejo land in Mailpit: http://mailpit.<project>.localhost"
+tags: [git, forge, repositories, code, issues, pull-requests, wiki, mail]
+footprint:
+  download_mb: 256
+  memory_mb: 350
+  first_start_seconds: 45

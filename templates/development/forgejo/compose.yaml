@@ -1,0 +1,68 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+# With SECRET_KEY set, the install page is skipped and app.ini is written from these
+# variables on the first start. SSH is off: no published port, Git goes over HTTP.
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:16.0.5-rootless
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: postgres:5432
+      DB_NAME: forgejo
+      DB_USER: forgejo
+      DB_PASSWD: ${DB_PASSWORD}
+      SECRET_KEY: ${SECRET_KEY}
+      ROOT_URL: http://${EC_HOSTNAME}/
+      DISABLE_SSH: "true"
+      FORGEJO__server__DOMAIN: ${EC_HOSTNAME}
+      FORGEJO__mailer__ENABLED: "true"
+      FORGEJO__mailer__PROTOCOL: smtp
+      FORGEJO__mailer__SMTP_ADDR: mailpit
+      FORGEJO__mailer__SMTP_PORT: "1025"
+      FORGEJO__mailer__FROM: forgejo@${EC_HOSTNAME}
+      FORGEJO__service__ENABLE_NOTIFY_MAIL: "true"
+      FORGEJO__time__DEFAULT_UI_LOCATION: ${EC_TZ}
+    volumes:
+      - forgejo-data:/var/lib/gitea
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:3000/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 1m
+
+  postgres:
+    image: postgres:18.6
+    environment:
+      POSTGRES_DB: forgejo
+      POSTGRES_USER: forgejo
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      # PostgreSQL 18 keeps its data under /var/lib/postgresql/18/docker.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "forgejo", "-d", "forgejo"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  mailpit:
+    image: axllent/mailpit:v1.31.3
+    environment:
+      MP_DISABLE_VERSION_CHECK: "true"
+      TZ: ${EC_TZ}
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  forgejo-data:
+  postgres-data:

@@ -39,7 +39,7 @@ def test_lists_templates_with_components(client: TestClient) -> None:
         by_category.setdefault(template["category"], []).append(template["id"])
     # At least two templates per category.
     assert all(len(ids) >= 2 for ids in by_category.values())
-    assert set(by_category) == {"itsm", "media", "security-lab"}
+    assert set(by_category) == {"itsm", "media", "security-lab", "development"}
 
     glpi = next(t for t in body["templates"] if t["id"] == "glpi")
     images = {c["service"]: c["image"] for c in glpi["components"]}

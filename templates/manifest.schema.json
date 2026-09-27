@@ -138,7 +138,8 @@
       "enum": [
         "itsm",
         "media",
-        "security-lab"
+        "security-lab",
+        "development"
       ],
       "title": "TemplateCategory",
       "type": "string"

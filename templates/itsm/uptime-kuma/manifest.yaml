@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=../../manifest.schema.json
+id: uptime-kuma
+name: Uptime Kuma
+category: itsm
+summary: Uptime monitoring of websites, APIs and ports, with alerts and status pages.
+description: >-
+  Uptime Kuma checks websites, APIs, keywords and TCP ports at a fixed interval, keeps
+  their response times and publishes status pages. It needs outbound Internet access to
+  reach what it monitors; its web UI is reachable only from this machine.
+components:
+  - service: uptime-kuma
+    name: Uptime Kuma 2.5
+    role: Monitoring engine and web UI (Node.js, SQLite).
+expose:
+  - service: uptime-kuma
+    port: 3001
+secrets: []
+needs_internet: true
+access_notes:
+  - "First visit: create the administrator account."
+  - It monitors public sites and services, not other EnvCrafter environments, which each have their own network.
+tags: [monitoring, uptime, status, http, alerts, availability]
+footprint:
+  download_mb: 182
+  memory_mb: 150
+  first_start_seconds: 60

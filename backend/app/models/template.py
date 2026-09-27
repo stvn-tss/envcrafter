@@ -25,12 +25,14 @@ class TemplateCategory(StrEnum):
     ITSM = "itsm"
     MEDIA = "media"
     SECURITY_LAB = "security-lab"
+    DEVELOPMENT = "development"
 
 
 CATEGORY_LABELS: dict[TemplateCategory, str] = {
     TemplateCategory.ITSM: "ITSM & Administration",
     TemplateCategory.MEDIA: "Multimedia",
     TemplateCategory.SECURITY_LAB: "Security & Lab",
+    TemplateCategory.DEVELOPMENT: "Development & databases",
 }
 
 ShortText = Annotated[str, StringConstraints(min_length=1, max_length=60)]

@@ -1,0 +1,14 @@
+# Source stack: networks, names and routing are added by EnvCrafter's renderer.
+services:
+  mailpit:
+    image: axllent/mailpit:v1.31.3
+    environment:
+      MP_MAX_MESSAGES: "5000"
+      MP_DISABLE_VERSION_CHECK: "true"
+      TZ: ${EC_TZ}
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

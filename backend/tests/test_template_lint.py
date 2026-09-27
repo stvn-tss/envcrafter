@@ -13,7 +13,17 @@ from app.policy.images import ImageAllowlist
 from app.tools.template_lint import SCHEMA_FILE, lint, main, manifest_schema
 
 REAL_TEMPLATES = Settings().templates_dir
-ALL = {"glpi", "zabbix", "audiobookshelf", "media-stack", "dvwa", "owasp-juice-shop"}
+ALL = {
+    "glpi",
+    "zabbix",
+    "uptime-kuma",
+    "audiobookshelf",
+    "media-stack",
+    "dvwa",
+    "owasp-juice-shop",
+    "forgejo",
+    "mailpit",
+}
 EVIL = "  evil:\n    image: docker.io/library/alpine:3.20\n    privileged: true\n"
 
 
@@ -94,4 +104,4 @@ def test_main_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     (copy / SCHEMA_FILE).unlink()
     assert main(["--templates", str(copy)]) == 1
     assert main(["--templates", str(copy), "--write-schema"]) == 0
-    assert "6 template(s) valid, 0 problem(s)" in capsys.readouterr().out
+    assert f"{len(ALL)} template(s) valid, 0 problem(s)" in capsys.readouterr().out
