@@ -121,10 +121,8 @@ def load_template(manifest_path: Path, allowlist: ImageAllowlist) -> Template:
     """Load and check one template directory (blocking I/O). Raises TemplateCatalogError."""
     template_dir = manifest_path.parent
     try:
-        manifest = TemplateManifest.model_validate(
-            load_yaml(manifest_path.read_text(encoding="utf-8"))
-        )
-        compose_source = load_yaml((template_dir / "compose.yaml").read_text(encoding="utf-8"))
+        manifest = TemplateManifest.model_validate(load_yaml(_read_text(manifest_path)))
+        compose_source = load_yaml(_read_text(template_dir / "compose.yaml"))
     except (OSError, StrictYAMLError, ValidationError) as exc:
         raise TemplateCatalogError(f"{template_dir}: {exc}") from None
 
@@ -165,6 +163,14 @@ def load_template(manifest_path: Path, allowlist: ImageAllowlist) -> Template:
         vulnerable=_is_vulnerable(compose, allowlist),
         logo=logo,
     )
+
+
+def _read_text(path: Path) -> str:
+    """Blocking. A template file as text; one that is not UTF-8 is a catalog error."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise TemplateCatalogError(f"{path}: not valid UTF-8") from None
 
 
 def _policy_context(manifest: TemplateManifest, allowlist: ImageAllowlist) -> PolicyContext:

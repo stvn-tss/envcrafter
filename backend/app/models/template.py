@@ -34,6 +34,8 @@ SECRET_NAME_PATTERN = r"^[A-Z][A-Z0-9_]{2,63}$"  # noqa: S105 - a name pattern, 
 # named like one would silently replace it in the workspace .env and escape the log
 # redaction, which skips built-in variables.
 RESERVED_SECRET_PREFIX = "EC_"  # noqa: S105 - a name prefix, not a secret
+# Editors validate manifests with the JSON Schema: it states the reserved prefix too.
+SECRET_NAME_SCHEMA_PATTERN = f"^(?!{re.escape(RESERVED_SECRET_PREFIX)}){SECRET_NAME_PATTERN[1:]}"
 _SECRET_NAME_RE = re.compile(SECRET_NAME_PATTERN)
 
 
@@ -52,8 +54,7 @@ SecretName = Annotated[
     str,
     StringConstraints(pattern=SECRET_NAME_PATTERN),
     AfterValidator(_not_reserved),
-    # Editors validate manifests with this schema: it states the reserved prefix too.
-    WithJsonSchema({"type": "string", "pattern": r"^(?!EC_)[A-Z][A-Z0-9_]{2,63}$"}),
+    WithJsonSchema({"type": "string", "pattern": SECRET_NAME_SCHEMA_PATTERN}),
 ]
 
 
