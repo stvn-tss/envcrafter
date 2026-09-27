@@ -10,9 +10,11 @@ downloads, health checks, failures) to a web UI in real time.
 
 ## Features
 
-- **Template catalog** — six ready-to-deploy stacks across three categories
-  (ITSM, multimedia, security labs), each with a description, footprint
-  estimate (download size, memory, first-start time) and default credentials.
+- **Template catalog** — nine ready-to-deploy stacks across four categories
+  (ITSM, multimedia, security labs, development), each with a description,
+  footprint estimate (download size, memory, first-start time) and default
+  credentials. Some take options chosen before deploying, such as DVWA's
+  security level or Juice Shop's mode.
 - **Natural-language requests with plan review** — describe what you need and
   Claude turns it into a stack (structured outputs only, no tool access, no
   code execution); you review the plan — components, images, network access,
@@ -37,11 +39,25 @@ downloads, health checks, failures) to a web UI in real time.
 - **Environments dashboard** — every deployed environment, its live state
   (running, starting, degraded, stopped...), each service with its health,
   every web address, the default accounts and first steps of its template, and
-  lifecycle actions: stop, start, restart, remove, or restart one service.
+  lifecycle actions: stop, start, restart, remove, or restart one service. An
+  environment without a chosen name is called after its template: `glpi-1`,
+  `glpi-2`...
+- **Environment drawer** — everything about one environment in one place: its
+  addresses and sign-in notes, your own title and notes, the options chosen at
+  deployment, each service with its health, CPU and memory, its volumes, its
+  activity history and every action.
 - **Failures that explain themselves** — when containers fail to start, the
   last log lines of the services that never became ready are kept in the
-  failed step (secrets redacted) before the rollback deletes them; a failed
-  job can be retried in one click.
+  failed step (secrets redacted) before the rollback deletes them. Retry is
+  offered when the same request may succeed, never after a refusal (a stack
+  rejected by the policy, an unsupported request). A deployment can also be
+  kept when it fails, to debug it in place.
+- **Durable history** — job summaries, AI plans still waiting for their
+  review and an audit log (edits, cancellations, key changes) are kept in
+  SQLite and survive restarts.
+- **Removal that fits the environment** — a disposable lab is removed after
+  a simple confirmation and a few seconds to undo; an environment that holds
+  data asks for its name first.
 - **Comfort** — light and dark themes (following the system, or pinned in
   Settings), optional browser notifications when a long deployment ends in the
   background, and each environment gets the browser's time zone (`${EC_TZ}`).
@@ -64,7 +80,9 @@ AI analysis        ┘              → networks & containers → startup
 
 A failure at any step after the workspace is written rolls the whole project
 back: containers, networks, volumes and workspace files are removed, so a
-failed deployment never leaves anything behind.
+failed deployment never leaves anything behind, unless it was asked to keep
+a failure for debugging (`keep_on_failure`). A cancelled deployment is always
+rolled back.
 
 The control plane is a small set of containers, each with the least Docker
 access it needs:
@@ -103,8 +121,9 @@ never sees the raw socket.
   filtering proxies. Traefik's proxy can only list and inspect containers.
   The API's proxy can manage containers, networks, volumes and images,
   start/stop them and read their logs (for the logs viewer), but can never
-  execute code in a container, build an image, or reach Swarm, system or
-  plugin endpoints.
+  execute code in a container, copy files in or out of one (`docker cp`,
+  which is also how Compose delivers `configs`: they are refused), build an
+  image, or reach Swarm, system or plugin endpoints.
 - **A security gate in front of every stack** — templates and AI-generated
   stacks alike are parsed with a hardened YAML loader (no aliases, no
   duplicate keys, size-capped) and validated against an allow-list schema
@@ -126,6 +145,10 @@ never sees the raw socket.
   fills in a typed, schema-validated stack description; its output is data,
   never code, a shell command, or a template to render. It never receives
   tools and cannot invoke `docker exec`.
+- **Template options are inert values** — a parameter chosen before
+  deploying is checked against the options its manifest declares and written
+  to the workspace `.env` from a tiny alphabet (no newline, `=`, `$`, quote or
+  space), so it can never add a line or reference another variable.
 - **Secrets are never echoed** — generated passwords live only in each
   project's workspace `.env` file; the API never returns them, and container
   logs have every generated secret value redacted before they leave the
@@ -136,6 +159,9 @@ never sees the raw socket.
   dedicated volume in the control plane). The API only ever reports where the
   active key comes from and its last four characters. Saving or removing it is
   guarded like every other state-changing request (Origin check; JSON bodies only).
+- **A history without secrets** — the SQLite history (job summaries, plans,
+  audit log) holds messages written for users, never a secret value or the
+  text of a request; its file is owner-only, next to the settings file.
 - **Loopback by default** — the control plane's only published port is bound
   to `127.0.0.1`. Exposing EnvCrafter beyond localhost needs authentication
   in front of it, which this project does not provide (see Limitations).
@@ -192,6 +218,8 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_IMAGE_ALLOWLIST` | `backend/app/policy/image_allowlist.yaml` | Path to the image allow-list file. |
 | `ENVCRAFTER_WORKSPACES_DIR` | `<repository root>/workspaces` | Where generated compose files, secrets and metadata are written. |
 | `ENVCRAFTER_SETTINGS_FILE` | `<repository root>/data/settings.json` | Settings saved from the UI (the Claude API key), owner-only. |
+| `ENVCRAFTER_HISTORY_FILE` | `<repository root>/data/history.sqlite3` | Job summaries, AI plans and the audit log (SQLite), owner-only. |
+| `ENVCRAFTER_HISTORY_RETENTION_DAYS` | `90` | How long jobs and audit lines are kept in the history. |
 | `ENVCRAFTER_TIMEZONE` | `Etc/UTC` | `${EC_TZ}` of an environment when the browser sends no known time zone. |
 | `ENVCRAFTER_LLM_API_KEY` | *(empty)* | Claude API key, if not saved from the UI (a UI key takes precedence). Prompt mode and AI plans are disabled without any key. |
 | `ENVCRAFTER_LLM_MODEL` | `claude-opus-5-5` | Model used to turn a request into a stack. |
@@ -212,7 +240,7 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_PLAN_TTL_SECONDS` | `900` | How long a reviewed AI plan can still be deployed. |
 | `ENVCRAFTER_MAX_PLANS` | `32` | Plans kept in memory at once (oldest evicted first). |
 | `ENVCRAFTER_INVENTORY_CACHE_SECONDS` | `2` | How long a `docker ps` result is reused across dashboard polls. |
-| `ENVCRAFTER_READINESS_CACHE_SECONDS` | `2` | How long one Docker reading serves the setup check and the capacity check before deploying. |
+| `ENVCRAFTER_READINESS_CACHE_SECONDS` | `2` | How long one Docker reading serves the setup check, the capacity check before deploying and the CPU/memory of an environment. |
 | `ENVCRAFTER_HEALTH_POLL_SECONDS` | `5` | Health-watcher poll period during startup. |
 | `ENVCRAFTER_PROGRESS_INTERVAL_SECONDS` | `0.5` | Minimum interval between `step.progress` events. |
 | `ENVCRAFTER_LOG_TAIL_MAX` | `1000` | Largest `tail` accepted on the logs WebSocket. |
@@ -220,10 +248,11 @@ commented list. The most relevant ones:
 | `ENVCRAFTER_SIMULATED_STEP_DELAY` | `0.4` | Delay between simulated engine steps (dev/tests only). |
 
 The defaults above for `ENVCRAFTER_TEMPLATES_DIR`, `ENVCRAFTER_WORKSPACES_DIR`,
-`ENVCRAFTER_SETTINGS_FILE` and `ENVCRAFTER_FRONTEND_DIR` apply to the local dev server; the
-control-plane image sets its own values (`/app/templates`, `/data/workspaces`,
-`/data/settings/settings.json`, `/app/frontend`) as `ENV` in `backend/Dockerfile`, matching where
-it copies those directories or mounts its volumes inside the container.
+`ENVCRAFTER_SETTINGS_FILE`, `ENVCRAFTER_HISTORY_FILE` and `ENVCRAFTER_FRONTEND_DIR` apply to
+the local dev server; the control-plane image sets its own values (`/app/templates`,
+`/data/workspaces`, `/data/settings/settings.json`, `/data/settings/history.sqlite3`,
+`/app/frontend`) as `ENV` in `backend/Dockerfile`, matching where it copies those
+directories or mounts its volumes inside the container.
 
 ## API overview
 
@@ -237,7 +266,7 @@ it copies those directories or mounts its volumes inside the container.
 | GET | `/api/templates/{template_id}/logo` | Template logo bytes, if any. |
 | GET | `/api/templates/{template_id}/readiness` | What deploying the template needs here: images already downloaded, download left, memory needed and available, free disk space, warnings. |
 | GET | `/api/system` | First-run checklist: Docker, the reverse proxy, free memory and disk, the AI key. |
-| POST | `/api/jobs` | Start a deployment: `{"mode": "template", "template_id": ...}`, `{"mode": "prompt", "prompt": ...}`, or `{"mode": "plan", "plan_id": ...}`, each with an optional `project_name` and `timezone` (IANA name, e.g. `Europe/Paris`). Returns `202` with `job_id` and `events_url`. |
+| POST | `/api/jobs` | Start a deployment: `{"mode": "template", "template_id": ...}` (optionally with `parameters`, the template's options), `{"mode": "prompt", "prompt": ...}`, or `{"mode": "plan", "plan_id": ...}`, each with an optional `project_name` (else `<template>-<n>`), `timezone` (IANA name, e.g. `Europe/Paris`) and `keep_on_failure`. Returns `202` with `job_id` and `events_url`; `422` for an option the template does not offer. |
 | GET | `/api/jobs` | List retained jobs (`?active=true` for queued/running only). |
 | GET | `/api/jobs/{job_id}` | One job's current summary. |
 | POST | `/api/jobs/{job_id}/cancel` | Stop a running deployment (rolled back) or AI analysis; the job ends with `job.cancelled`. Returns `202`; `409` for other jobs or jobs already over. |
@@ -245,6 +274,9 @@ it copies those directories or mounts its volumes inside the container.
 | GET | `/api/plans/{plan_id}` | The reviewable plan: components, images, network access, storage, secret count. |
 | GET | `/api/environments` | Every environment with its live state. |
 | GET | `/api/environments/{project}` | One environment's state and services. |
+| PATCH | `/api/environments/{project}` | `{"title": ..., "notes": ...}` (one or both): change the display title or the notes. `409` while a job runs on it. |
+| GET | `/api/environments/{project}/usage` | CPU and memory of each running service (one `docker stats` sample, shared for a few seconds). |
+| GET | `/api/environments/{project}/activity` | Its jobs and edits since its latest deployment, newest first (`?limit=`, at most 200). |
 | POST | `/api/environments/{project}/actions` | Lifecycle action: `{"action": "stop"\|"start"\|"restart"}`, or `{"action": "restart", "service": ...}` to restart one service. Returns `202`. |
 | DELETE | `/api/environments/{project}` | Remove an environment (containers, networks, volumes, workspace). Returns `202`. |
 | GET | `/api/settings` | Whether a Claude API key is configured, its source (`settings` or `environment`), its last four characters and the model. Never the key. |
@@ -267,7 +299,9 @@ not reconnect); any other close (e.g. `1006`) should be retried with backoff.
 ### Event types
 
 `job.accepted`, `step.started`, `step.log`, `step.progress`, `step.completed`,
-`step.failed`, `job.succeeded`, `job.failed`, `job.cancelled`.
+`step.failed`, `job.succeeded`, `job.failed`, `job.cancelled`. `job.failed`
+carries `retryable` (whether the same request may succeed if sent again) and,
+for a deployment kept for debugging, `kept`.
 
 ## Templates
 
@@ -275,10 +309,13 @@ not reconnect); any other close (e.g. `1006`) should be retried with backoff.
 |---|---|---|---|---|---|
 | GLPI | ITSM & Administration | GLPI, MariaDB | 454 MB | 400 MB | ~120 s |
 | Zabbix | ITSM & Administration | Zabbix web, Zabbix server, MariaDB | 199 MB | 350 MB | ~90 s |
+| Uptime Kuma | ITSM & Administration | Uptime Kuma | 182 MB | 150 MB | ~60 s |
 | Audiobookshelf | Multimedia | Audiobookshelf | 115 MB | 150 MB | ~20 s |
 | Media Stack | Multimedia | Jellyfin, Sonarr, Radarr, Prowlarr, qBittorrent | 1048 MB | 750 MB | ~60 s |
 | DVWA | Security & Lab | DVWA, MariaDB | 318 MB | 250 MB | ~45 s |
 | OWASP Juice Shop | Security & Lab | OWASP Juice Shop | 114 MB | 250 MB | ~30 s |
+| Forgejo | Development & databases | Forgejo, PostgreSQL, Mailpit | 256 MB | 350 MB | ~45 s |
+| Mailpit | Development & databases | Mailpit | 14 MB | 30 MB | ~10 s |
 
 Footprint figures are approximate, measured on `linux/amd64` with images
 already cached; the end-to-end suite measures them on every run and warns
@@ -304,7 +341,12 @@ already cached; the end-to-end suite measures them on every run and warns
    check the software's logo usage policy before publishing it. Start the file
    with `# yaml-language-server: $schema=../../manifest.schema.json` for
    completion and validation in editors. Secret names starting with `EC_` are
-   reserved for built-in variables.
+   reserved for built-in variables. Optional:
+   - `parameters`: options chosen before deploying, written to the workspace
+     `.env` and referenced as `${NAME}` in `compose.yaml` — `enum` (a list of
+     `{value, label}` and a `default`) or `boolean` (written `true`/`false`);
+   - `disposable: true` for a lab that holds nothing worth keeping: removing it
+     asks for a simple confirmation instead of its name.
 4. Check the catalog from `backend/`: `uv run python -m app.tools.template_lint`
    applies the startup rules template by template. The application itself
    refuses to start if a template breaks the security policy or its manifest
@@ -361,7 +403,7 @@ ENVCRAFTER_UI=1 uv run pytest tests/ui
     one used in development and tests.
   - `app/services/`: the deployment pipeline, the real-time event bus, the
     environment inventory, container log streaming, the plan store, the
-    template catalog.
+    template catalog, the SQLite history, the readiness and usage readings.
   - `tests/`: unit and API tests, `tests/e2e/` (opt-in, real control plane),
     `tests/ui/` (opt-in, Playwright).
 - `frontend/`: static HTML/CSS and vanilla ES modules — no framework, no
@@ -372,14 +414,18 @@ ENVCRAFTER_UI=1 uv run pytest tests/ui
   proxies, the API) and Traefik configuration.
 - `workspaces/`: runtime output — generated compose files, secrets and
   metadata for each deployed environment. Git-ignored.
-- `data/`: settings saved from the UI (the Claude API key). Git-ignored.
+- `data/`: settings saved from the UI (the Claude API key) and the history
+  database. Git-ignored.
 - `ROADMAP.md`: what comes next, and what is already done.
 
 ## Limitations
 
 - The real-time event bus is in-process: run a single Uvicorn worker.
-- Job history is kept in memory only, for about one hour; durable truth is
-  always the workspace files and the Docker state, not the job log.
+- The step-by-step events of a job stay in memory for about one hour; its
+  summary is kept in the SQLite history. Durable truth is always the
+  workspace files and the Docker state.
+- Volume sizes are not shown: reading them needs Docker's system endpoint,
+  which the API's socket proxy does not allow.
 - Docker Desktop on Windows is supported through the containerized control
   plane; the local development server (`uv run uvicorn ...`) always runs the
   simulated engine and never deploys real containers.

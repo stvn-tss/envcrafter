@@ -41,14 +41,29 @@ ordered, the items inside a phase are not.
 - [x] **Continuous integration** — lint, types, tests and the template check on Linux and
   Windows.
 - [x] **A key without credit says so** — instead of a generic API error.
+- [x] **Environment drawer** — every address, sign-in details, your own title and
+  notes, the options chosen, services with their health, CPU and memory, volumes,
+  activity history and every action, in one place. Volume sizes are left out: the
+  API's socket proxy does not expose the endpoint that reads them.
+- [x] **Template parameters** — typed options (lists and booleans) chosen before
+  deploying: DVWA's security level, Juice Shop's mode.
+- [x] **Keep on failure** — an option that keeps a failed deployment for debugging
+  instead of rolling it back.
+- [x] **Readable names and notes** — `glpi-1`, `glpi-2`..., an editable title and
+  free-text notes per environment.
+- [x] **Durable history** — job summaries, reviewable AI plans and an audit log in
+  SQLite: they survive a restart.
+- [x] **Lighter removal for disposable labs** — a simple confirmation and a few
+  seconds to undo; typing the name stays for environments holding data.
+- [x] **Retry only when it may help** — no Retry after a refusal (unsupported
+  request, stack rejected by the policy, expired plan, key without credit).
+- [x] **Building blocks and new templates** — PostgreSQL, Redis, Adminer and Mailpit
+  in the allow-list; Uptime Kuma, Forgejo and Mailpit templates.
 
 ## Phase 1 — Self-sufficient after deployment
 
 Once an environment runs, everything needed to use it should be one click away.
 
-- [ ] **Environment page** (drawer or page): every address, sign-in details, notes,
-  services with their health, volumes and their size, CPU/RAM, logs, activity history, and
-  all actions in one place.
 - [ ] **Credentials you can reveal** — split secrets into *internal* (databases, never
   shown) and *user-facing* (admin accounts), declared in the manifest
   (`credentials: [{label, username, password_secret}]`) and revealed on demand, with an
@@ -57,24 +72,15 @@ Once an environment runs, everything needed to use it should be one click away.
   `admin/password` defaults.
 - [ ] **Credentials from logs** — declarative extraction (`credentials_from_logs: {service,
   pattern}`) for apps that print a first password (qBittorrent).
-- [ ] **Template parameters** — typed inputs in the manifest (enum, string, boolean),
-  rendered as a form before deploying: DVWA security level, GLPI language, admin e-mail...
-- [ ] **Keep on failure** — an option that skips the rollback of a failed deployment, for
-  debugging.
-- [ ] **Readable names** — `glpi-1` or `glpi-brave-otter` rather than `glpi-3f2a`; editable
-  display title and free-text notes per environment.
-- [ ] **Durable history** — jobs, plans and an audit log in SQLite (today: memory only, one
-  hour for jobs, 15 minutes for plans, lost on restart).
+- [ ] **Free-text template parameters** — strings with a strict pattern (admin e-mail,
+  language), after the lists and booleans already available.
 - [ ] **Download time estimate** — the capacity check knows what is left to download, not
   the bandwidth: remember the throughput of past pulls to estimate the wait.
-- [ ] **Lighter removal for disposable environments** — simple confirmation with a few
-  seconds to undo; typing the name stays for environments holding data.
-- [ ] **French and English UI**.
 
 ## Phase 2 — A richer catalog and a more useful AI
 
-- [ ] **Generic building blocks in the image allow-list** — PostgreSQL, Redis, Mailpit,
-  Adminer, Nginx... With 12 images, custom AI stacks can only recombine the templates.
+- [ ] **More building blocks in the image allow-list** — Nginx, MongoDB, RabbitMQ... so
+  that custom AI stacks do more than recombine the templates.
 - [ ] **A richer AI output contract** — several web UIs (today exactly one), access notes
   and credentials for custom stacks, and a default healthcheck per allow-listed image,
   injected by the renderer when a stack has none.
@@ -87,8 +93,11 @@ Once an environment runs, everything needed to use it should be one click away.
   cosign verification in CI, a `platforms` field (arm64: Apple Silicon, Raspberry Pi) to
   hide what cannot run on the host.
 - [ ] **Seed files and demo data** — bind mounts (`./...`) are resolved by the Docker daemon
-  on the host, while the control plane keeps workspaces in a volume: templates cannot ship
-  configuration files yet (Prometheus, Mosquitto 2.x need one).
+  on the host, while the control plane keeps workspaces in a volume, and Compose `configs`
+  (inline content) are copied through the archive endpoint that the socket proxy keeps
+  closed (it would let the API read any file in any container). Templates that need a
+  configuration file (Prometheus, Mosquitto 2.x) wait for a decision: open that endpoint,
+  or pass the file in an environment variable that the container's shell writes at start.
 
 ## Phase 3 — Lifecycle
 
@@ -125,15 +134,15 @@ Existing categories:
 
 | Category | Ideas |
 |---|---|
-| ITSM & Administration | Snipe-IT, NetBox, Uptime Kuma (very light), LibreNMS or Checkmk, BookStack, Keycloak, lldap |
+| ITSM & Administration | Snipe-IT, NetBox, LibreNMS or Checkmk, BookStack, Keycloak, lldap |
 | Multimedia | Navidrome, Kavita or Komga, Calibre-Web, Jellyseerr, Bazarr, Lidarr |
+| Development & databases | code-server, PostgreSQL + pgAdmin, MariaDB + phpMyAdmin, MongoDB + mongo-express, Redis + RedisInsight, Redpanda + Console, RabbitMQ, Verdaccio |
 | Security & Lab | WebGoat, DVGA (GraphQL), crAPI (APIs), WrongSecrets, Mutillidae II, Vulhub scenarios (Log4Shell...), CTFd, CyberChef, ZAP (Webswing), an in-browser Kali workstation |
 
 New categories:
 
 | Category | Ideas |
 |---|---|
-| Development & databases | Gitea or Forgejo, code-server, PostgreSQL + pgAdmin, MariaDB + phpMyAdmin, MongoDB + mongo-express, Redis + RedisInsight, Mailpit, Redpanda + Console, RabbitMQ, Verdaccio |
 | Observability | Prometheus + Grafana, Loki, Graylog |
 | Productivity | Nextcloud, Paperless-ngx, Stirling-PDF, Excalidraw, HedgeDoc, Vikunja, Mattermost |
 | Business & web | Odoo, Dolibarr, WordPress, Directus, Matomo |
