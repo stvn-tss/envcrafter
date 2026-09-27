@@ -1,3 +1,5 @@
+import asyncio
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -7,7 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings
-from app.engine.base import EngineError, ServiceStatus, StackHandle
+from app.engine.base import (
+    EngineError,
+    LogSink,
+    ProgressSink,
+    ServiceStatus,
+    StackHandle,
+)
 from app.engine.simulated import SimulatedEngine
 from app.models.deployment import JobStatus
 from app.models.environment import EnvironmentState
@@ -17,6 +25,7 @@ from app.workspace.manager import WorkspaceManager
 from tests.conftest import collect_events, run_job
 
 RUNNING = "running"
+ORIGIN = {"Origin": "http://localhost:8000"}
 
 
 def _status(service: str, state: str = RUNNING, health: str | None = None) -> ServiceStatus:
@@ -88,11 +97,75 @@ def test_running_job_is_attached_to_its_environment(make_client: Any, settings: 
         "job_id": job["job_id"],
         "mode": "template",
         "events_url": job["events_url"],
+        "service": None,
+        "cancel_requested": False,
     }
     assert env["state"] in {"pending", "running"}  # pending until the workspace exists
     with client.websocket_connect(job["events_url"]) as ws:
         collect_events(ws)
     assert client.get("/api/environments/desk").json()["job"] is None
+
+
+def test_the_active_job_names_the_service_it_restarts(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_job(client, {"mode": "template", "template_id": "media-stack", "project_name": "media"})
+    starting, release = threading.Event(), threading.Event()
+
+    async def slow_start(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, *, service: str | None = None
+    ) -> None:
+        starting.set()
+        # Set by the test thread: wait in a worker thread, never on the event loop.
+        await asyncio.to_thread(release.wait, 10)
+
+    monkeypatch.setattr(SimulatedEngine, "start", slow_start)
+    response = client.post(
+        "/api/environments/media/actions", json={"action": "restart", "service": "sonarr"}
+    )
+    assert response.status_code == 202, response.text
+    try:
+        assert starting.wait(10)
+        job = client.get("/api/environments/media").json()["job"]
+    finally:
+        release.set()
+
+    assert job["mode"] == "restart"
+    assert job["service"] == "sonarr"
+    assert job["cancel_requested"] is False
+
+
+def test_the_active_job_shows_a_cancellation_under_way(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pulling, removing, release = threading.Event(), threading.Event(), threading.Event()
+
+    async def slow_pull(
+        self: SimulatedEngine, stack: StackHandle, log: LogSink, progress: ProgressSink
+    ) -> None:
+        pulling.set()
+        await asyncio.to_thread(release.wait, 10)
+
+    async def slow_remove(self: SimulatedEngine, stack: StackHandle, log: LogSink) -> None:
+        removing.set()
+        await asyncio.to_thread(release.wait, 10)
+
+    monkeypatch.setattr(SimulatedEngine, "pull", slow_pull)
+    monkeypatch.setattr(SimulatedEngine, "remove", slow_remove)
+    job = client.post(
+        "/api/jobs", json={"mode": "template", "template_id": "dvwa", "project_name": "lab"}
+    ).json()
+    try:
+        assert pulling.wait(10)
+        cancel = client.post(f"/api/jobs/{job['job_id']}/cancel", headers=ORIGIN)
+        assert cancel.status_code == 202, cancel.text
+        assert removing.wait(10)  # the rollback runs: the job is still active
+        reference = client.get("/api/environments/lab").json()["job"]
+    finally:
+        release.set()
+
+    assert reference["job_id"] == job["job_id"]
+    assert reference["cancel_requested"] is True
 
 
 def test_engine_failure_reports_unknown_states(

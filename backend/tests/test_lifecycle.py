@@ -152,6 +152,8 @@ def test_rollback_keeps_the_environment_reserved(
         "job_id": job["job_id"],
         "mode": "template",
         "events_url": job["events_url"],
+        "service": None,
+        "cancel_requested": False,
     }
     with client.websocket_connect(job["events_url"]) as ws:
         events = collect_events(ws)

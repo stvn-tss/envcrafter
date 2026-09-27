@@ -207,7 +207,13 @@ class EnvironmentInventory:
 
 
 def _job_ref(job: Job) -> ActiveJobRef:
-    return ActiveJobRef(job_id=job.id, mode=job.mode, events_url=job_events_url(job.id))
+    return ActiveJobRef(
+        job_id=job.id,
+        mode=job.mode,
+        events_url=job_events_url(job.id),
+        service=job.service,
+        cancel_requested=job.cancel_requested,
+    )
 
 
 def _newest_first(view: EnvironmentView) -> tuple[bool, float]:

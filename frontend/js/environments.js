@@ -200,7 +200,8 @@ export class EnvironmentsPanel {
     const state = STATES[environment.state] ?? STATES.unknown;
     row.item.dataset.state = environment.state ?? "unknown";
     row.title.textContent = typeof environment.title === "string" ? environment.title : environment.project;
-    row.state.textContent = busy ? (JOB_LABELS[environment.job.mode] ?? "Working") : state.label;
+    const jobLabel = environment.job?.cancel_requested === true ? "Cancelling" : JOB_LABELS[environment.job?.mode];
+    row.state.textContent = busy ? (jobLabel ?? "Working") : state.label;
     row.state.dataset.tone = busy ? "running" : state.tone;
 
     const services = Array.isArray(environment.services) ? environment.services : [];

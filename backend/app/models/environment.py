@@ -69,6 +69,8 @@ class ActiveJobRef(BaseModel):
     job_id: UUID
     mode: JobMode
     events_url: str
+    service: str | None = None  # the one service a restart targets
+    cancel_requested: bool = False  # a cancellation is under way (the rollback runs)
 
 
 class EnvironmentView(BaseModel):

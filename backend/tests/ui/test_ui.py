@@ -212,8 +212,8 @@ def test_plan_review_then_deploy(page: Page, live_server_with_llm: LiveServer) -
     expect(page.locator("#job-result")).to_contain_text("http://lab.localhost")
 
 
-def test_a_running_deployment_can_be_cancelled(page: Page, live_server_slow: LiveServer) -> None:
-    errors = open_home(page, live_server_slow)
+def test_a_running_deployment_can_be_cancelled(page: Page, slow_live_server: LiveServer) -> None:
+    errors = open_home(page, slow_live_server)
     deploy_template(page, "Media Stack", "media")
     cancel = page.locator("#job-cancel")
     expect(cancel).to_be_visible()
@@ -257,7 +257,8 @@ def test_setup_check_shows_on_first_visit_until_dismissed(
     page.get_by_role("button", name="Got it").click()
     expect(panel).to_be_hidden()
     page.reload()
-    expect(page.locator(".template-card").first).to_be_visible()
+    # The panel is hidden until GET /api/system answers: wait for the list it fills.
+    expect(page.locator("#setup-list li").first).to_be_attached()
     expect(panel).to_be_hidden()
     assert errors == []
 
