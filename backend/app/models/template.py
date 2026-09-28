@@ -84,7 +84,7 @@ LOGO_FILE_PATTERN = r"^logo\.(png|webp)$"
 
 
 class TemplateFootprint(StrictModel):
-    """Approximate weight of a template on linux/amd64 (see README, "Adding a template")."""
+    """Approximate weight on linux/amd64 (see docs/DOCUMENTATION.md, "Adding a template")."""
 
     download_mb: Annotated[int, Field(ge=1, le=100_000)]  # compressed images
     memory_mb: Annotated[int, Field(ge=1, le=100_000)]  # steady-state RAM of the stack
