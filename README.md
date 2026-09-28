@@ -8,64 +8,36 @@ validates the stack against a strict security policy, writes an isolated
 Docker Compose workspace for it, and deploys it — streaming every step (image
 downloads, health checks, failures) to a web UI in real time.
 
+![The EnvCrafter dashboard: the environments on the left, a deployment streaming its progress on the right](docs/screenshots/dashboard.png)
+
 ## Features
 
 - **Template catalog** — nine ready-to-deploy stacks across four categories
-  (ITSM, multimedia, security labs, development), each with a description,
-  footprint estimate (download size, memory, first-start time) and default
-  credentials. Some take options chosen before deploying, such as DVWA's
-  security level or Juice Shop's mode.
-- **Natural-language requests with plan review** — describe what you need and
-  Claude turns it into a stack (structured outputs only, no tool access, no
-  code execution); you review the plan — components, images, network access,
-  storage, secret count — before anything is deployed. The Claude API key is
-  entered in **Settings** (checked with the API, stored on the server only); no
-  file to edit. Without a key, the same box finds the closest templates.
-- **Security gate** — every stack, whether it comes from a template or from
-  the AI, is parsed with a hardened YAML loader and passes the same
-  `validate_compose()` policy: allow-listed images only, no privileged mode,
-  no host mounts, no Docker socket access, no undeclared variables.
-- **Isolated networks per project** — each environment gets its own internal
-  Docker network; Internet access and public routing are opt-in, per service.
-- **Live progress** — deployments stream step-by-step events: image pull
-  percentage, container health, and a clear failure reason if something goes
-  wrong, with automatic rollback. A running deployment or AI analysis can be
-  cancelled: a download or a startup stops at once and is rolled back.
-- **Ready before you deploy** — each template says what it needs on this
-  machine: images already downloaded or the download left, the memory it needs
-  next to what is available, free disk space, and when it will be ready. A
-  setup check (Docker, reverse proxy, memory, disk, AI key) greets the first
-  visit and stays in Settings.
-- **Environments dashboard** — every deployed environment, its live state
-  (running, starting, degraded, stopped...), each service with its health,
-  every web address, the default accounts and first steps of its template, and
-  lifecycle actions: stop, start, restart, remove, or restart one service. An
-  environment without a chosen name is called after its template: `glpi-1`,
-  `glpi-2`...
-- **Environment drawer** — everything about one environment in one place: its
-  addresses and sign-in notes, your own title and notes, the options chosen at
-  deployment, each service with its health, CPU and memory, its volumes, its
-  activity history and every action.
-- **Failures that explain themselves** — when containers fail to start, the
-  last log lines of the services that never became ready are kept in the
-  failed step (secrets redacted) before the rollback deletes them. Retry is
-  offered when the same request may succeed, never after a refusal (a stack
-  rejected by the policy, an unsupported request). A deployment can also be
-  kept when it fails, to debug it in place.
-- **Durable history** — job summaries, AI plans still waiting for their
-  review and an audit log (edits, cancellations, key changes) are kept in
-  SQLite and survive restarts.
-- **Removal that fits the environment** — a disposable lab is removed after
-  a simple confirmation and a few seconds to undo; an environment that holds
-  data asks for its name first.
-- **Comfort** — light and dark themes (following the system, or pinned in
-  Settings), optional browser notifications when a long deployment ends in the
-  background, and each environment gets the browser's time zone (`${EC_TZ}`).
-- **Container logs** — live log tail per service over a WebSocket, with
-  generated secrets redacted before they ever reach the browser.
-- **Simulated engine for development** — the whole pipeline runs without
-  Docker for local development and the test suite; real deployments run
-  through the containerized control plane.
+  (ITSM, multimedia, security labs, development), each with its footprint and
+  how to sign in; some take options chosen before deploying.
+- **Requests in plain English** — Claude turns what you describe into a stack,
+  and you review the plan (components, images, network access, storage) before
+  anything is deployed. Without an API key, the same box finds the closest
+  templates.
+- **One security gate for every stack** — templates and AI plans pass the same
+  strict policy: pinned, allow-listed images only; no privileged containers, no
+  host mounts, no access to the Docker socket.
+- **Isolated environments** — each environment gets its own network; Internet
+  access and web routing are opt-in, per service.
+- **Ready before you deploy** — what a template needs (download, memory, disk
+  space, time to start) is checked against your machine, and a setup check
+  greets the first visit.
+- **Live progress** — every step streams to the browser, from image downloads
+  to health checks. A failed deployment shows the last log lines of what went
+  wrong (secrets redacted) and is rolled back, unless you keep it to debug it;
+  any deployment can be cancelled.
+- **Environments dashboard** — state, web addresses, sign-in details, CPU and
+  memory, container logs (secrets redacted), your own notes and an activity
+  history; stop, start, restart or remove each environment.
+- **Durable history** — job summaries, AI plans and an audit log survive
+  restarts.
+- **Comfort** — light and dark themes, optional browser notifications when a
+  long deployment ends, and each environment set to your browser's time zone.
 
 ## How it works
 
@@ -78,230 +50,67 @@ template lookup           ┐
 AI analysis        ┘              → networks & containers → startup
 ```
 
-A failure at any step after the workspace is written rolls the whole project
-back: containers, networks, volumes and workspace files are removed, so a
-failed deployment never leaves anything behind, unless it was asked to keep
-a failure for debugging (`keep_on_failure`). A cancelled deployment is always
-rolled back.
+- **Checked before anything runs** — a stack must pass the security policy
+  before its workspace is written or its images are downloaded.
+- **All or nothing** — a failure at any later step removes everything created
+  for the environment (containers, networks, volumes, workspace files), unless
+  you asked to keep it for debugging. A cancelled deployment is always rolled
+  back.
+- **On your machine only** — each environment is served at
+  `http://<project>.localhost` by a reverse proxy (Traefik) that listens on
+  `127.0.0.1` only.
+- **Least privilege** — EnvCrafter never touches the Docker socket itself: it
+  goes through a filtering proxy that never lets it run code inside a container
+  or build an image.
 
-The control plane is a small set of containers, each with the least Docker
-access it needs:
+The [documentation](docs/DOCUMENTATION.md) details the architecture and the
+security model.
 
-```
-                     127.0.0.1:80 (loopback only)
-                            │
-                        ┌───▼───┐
-                        │Traefik│  (routes http://<project>.localhost to
-                        └─┬───┬─┘   the right environment; joins only the
-                          │   │     opt-in "edge" network of each project)
-          read-only view  │   └──────────────► environment containers
-          (list/inspect)  │
-                    ┌─────▼──────┐        ┌──────────────┐
-                    │socket-proxy│        │  socket-proxy │  containers, networks,
-                    │  -traefik  │        │     -api      │  volumes, images,
-                    └─────┬──────┘        └──────┬───────┘  start/stop, logs (never
-                          │                       │           exec, build or host access)
-                          └──────────┬────────────┘
-                                     ▼
-                              Docker socket
-                                     ▲
-                                     │ compose commands over the proxy
-                              ┌──────┴──────┐
-                              │  EnvCrafter │──── HTTPS ───► Claude API
-                              │     API     │      (only if a key is configured)
-                              └─────────────┘
-```
+## Screenshots
 
-Only the two socket proxies ever touch `/var/run/docker.sock`; the API itself
-never sees the raw socket.
-
-## Security model
-
-- **Least-privilege Docker access** — the Docker socket is mounted only by two
-  filtering proxies. Traefik's proxy can only list and inspect containers.
-  The API's proxy can manage containers, networks, volumes and images,
-  start/stop them and read their logs (for the logs viewer), but can never
-  execute code in a container, copy files in or out of one (`docker cp`,
-  which is also how Compose delivers `configs`: they are refused), build an
-  image, or reach Swarm, system or plugin endpoints.
-- **A security gate in front of every stack** — templates and AI-generated
-  stacks alike are parsed with a hardened YAML loader (no aliases, no
-  duplicate keys, size-capped) and validated against an allow-list schema
-  that rejects unknown fields outright, then explicitly denies privileged
-  containers, added capabilities, host device mappings, host namespaces,
-  published ports, unusual `security_opt` values, custom volume drivers,
-  reserved labels, any reference to the Docker socket, bind mounts outside
-  the workspace, images that are not on the allow-list, and variables the
-  stack never declared.
-- **An image allow-list** — every image a template or the AI can use is
-  pinned to an exact tag or digest and reviewed ahead of time; nothing is
-  ever pulled by an unpinned or arbitrary reference.
-- **Network isolation per project** — each environment gets its own internal
-  network. Internet egress and public routing are separate, opt-in networks
-  attached only to the services that need them; Traefik only reaches a
-  project through its dedicated edge network and only serves the loopback
-  port, so no environment can reach another project, or the API, through it.
-- **No remote code execution through the AI** — the language model only ever
-  fills in a typed, schema-validated stack description; its output is data,
-  never code, a shell command, or a template to render. It never receives
-  tools and cannot invoke `docker exec`.
-- **Template options are inert values** — a parameter chosen before
-  deploying is checked against the options its manifest declares and written
-  to the workspace `.env` from a tiny alphabet (no newline, `=`, `$`, quote or
-  space), so it can never add a line or reference another variable.
-- **Secrets are never echoed** — generated passwords live only in each
-  project's workspace `.env` file; the API never returns them, and container
-  logs have every generated secret value redacted before they leave the
-  server.
-- **The Claude API key is write-only** — a key entered in Settings is checked
-  against the Claude API (a model lookup, no tokens spent), then stored in a
-  settings file with owner-only permissions (`ENVCRAFTER_SETTINGS_FILE`, a
-  dedicated volume in the control plane). The API only ever reports where the
-  active key comes from and its last four characters. Saving or removing it is
-  guarded like every other state-changing request (Origin check; JSON bodies only).
-- **A history without secrets** — the SQLite history (job summaries, plans,
-  audit log) holds messages written for users, never a secret value or the
-  text of a request; its file is owner-only, next to the settings file.
-- **Loopback by default** — the control plane's only published port is bound
-  to `127.0.0.1`. Exposing EnvCrafter beyond localhost needs authentication
-  in front of it, which this project does not provide (see Limitations).
-- **Vulnerable lab images stay offline** — templates flagged as intentionally
-  vulnerable (security-lab category) are never given Internet access; the
-  policy enforces this regardless of what a template or plan requests.
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/catalog.png" alt="The template catalog, filtered by category, with the footprint of each template">
+      <p align="center"><b>Template catalog</b></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/template-details.png" alt="DVWA details: its security level option and the capacity check before deploying">
+      <p align="center"><b>Options and capacity check</b></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/ai-plan.png" alt="An AI plan to review: PostgreSQL with Adminer, its images, web access, network and storage">
+      <p align="center"><b>AI plan review</b></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/environment-drawer.png" alt="Environment details: web address, sign-in details, title and notes, services with CPU and memory">
+      <p align="center"><b>Environment details</b></p>
+    </td>
+  </tr>
+</table>
 
 ## Quick start
 
-Prerequisites: Docker Desktop or Docker Engine with Compose v2+, and, for
-local development, [uv](https://docs.astral.sh/uv/) and Python 3.12+.
+Prerequisites: Docker Desktop or Docker Engine with Compose v2+.
 
 ```bash
-cp .env.example .env
-```
-
-Natural-language requests need a Claude API key: add it from the UI
-(**Settings → Claude API key**), or set `ENVCRAFTER_LLM_API_KEY` in `.env`. A key
-saved from the UI takes precedence; removing it falls back to the `.env` key.
-
-**Control plane (real deployments):**
-
-```bash
+git clone https://github.com/stvn-tss/envcrafter.git
+cd envcrafter
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-Then open http://envcrafter.localhost.
+Then open http://envcrafter.localhost and deploy a template.
 
-**Development server (simulated engine, no Docker deployments):**
+Describing environments in plain English needs a Claude API key: add it in
+**Settings → Claude API key**, or in a `.env` file (see
+[Configuration](docs/DOCUMENTATION.md#configuration)). Templates work without
+one.
 
-```bash
-cd backend
-uv sync
-uv run uvicorn app.main:app --reload
-```
-
-Then open http://localhost:8000. This mode also serves the frontend and runs
-the whole pipeline except the actual Docker calls — handy for UI and backend
-work without pulling images.
-
-## Configuration
-
-Every setting is an environment variable (or a line in `.env`), prefixed
-`ENVCRAFTER_`, with a sensible default — see `.env.example` for the full,
-commented list. The most relevant ones:
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `ENVCRAFTER_ENVIRONMENT` | `development` | `development` or `production` (affects API docs exposure). |
-| `ENVCRAFTER_PUBLIC_DOMAIN` | `localhost` | Environments are served at `http://<project>.<public_domain>`. |
-| `ENVCRAFTER_SERVE_FRONTEND` | `true` | Serve the static frontend from the API process. |
-| `ENVCRAFTER_FRONTEND_DIR` | `<repository root>/frontend` | Where the static frontend is served from. |
-| `ENVCRAFTER_TEMPLATES_DIR` | `<repository root>/templates` | Where the template catalog is loaded from. |
-| `ENVCRAFTER_IMAGE_ALLOWLIST` | `backend/app/policy/image_allowlist.yaml` | Path to the image allow-list file. |
-| `ENVCRAFTER_WORKSPACES_DIR` | `<repository root>/workspaces` | Where generated compose files, secrets and metadata are written. |
-| `ENVCRAFTER_SETTINGS_FILE` | `<repository root>/data/settings.json` | Settings saved from the UI (the Claude API key), owner-only. |
-| `ENVCRAFTER_HISTORY_FILE` | `<repository root>/data/history.sqlite3` | Job summaries, AI plans and the audit log (SQLite), owner-only. |
-| `ENVCRAFTER_HISTORY_RETENTION_DAYS` | `90` | How long jobs and audit lines are kept in the history. |
-| `ENVCRAFTER_TIMEZONE` | `Etc/UTC` | `${EC_TZ}` of an environment when the browser sends no known time zone. |
-| `ENVCRAFTER_LLM_API_KEY` | *(empty)* | Claude API key, if not saved from the UI (a UI key takes precedence). Prompt mode and AI plans are disabled without any key. |
-| `ENVCRAFTER_LLM_MODEL` | `claude-opus-5-5` | Model used to turn a request into a stack. |
-| `ENVCRAFTER_LLM_EFFORT` | `high` | Reasoning effort: `low`, `medium`, `high`, `xhigh` or `max`. |
-| `ENVCRAFTER_LLM_TIMEOUT_SECONDS` | `180` | Timeout for a translation request. |
-| `ENVCRAFTER_ENGINE` | `simulated` | `simulated` (dev/tests) or `docker` (control plane). |
-| `ENVCRAFTER_DOCKER_HOST` | `tcp://socket-proxy-api:2375` | Docker endpoint the API talks to (docker engine only). |
-| `ENVCRAFTER_DOCKER_BINARY` | `docker` | Docker CLI binary name/path. |
-| `ENVCRAFTER_TRAEFIK_CONTAINER` | `envcrafter-traefik` | Container name reattached to a project's edge network on start. |
-| `ENVCRAFTER_PULL_TIMEOUT_SECONDS` | `1800` | Timeout for image downloads. |
-| `ENVCRAFTER_START_TIMEOUT_SECONDS` | `600` | Timeout for `compose up --wait`. |
-| `ENVCRAFTER_STOP_TIMEOUT_SECONDS` | `20` | Grace period for `compose stop`. |
-| `ENVCRAFTER_ALLOWED_ORIGINS` | `["http://localhost:8000","http://127.0.0.1:8000"]` | Origins allowed to call the API or open a WebSocket (JSON array). |
-| `ENVCRAFTER_ALLOWED_HOSTS` | `["localhost","127.0.0.1","*.localhost"]` | Accepted `Host` headers (JSON array). |
-| `ENVCRAFTER_EVENT_HISTORY_SIZE` | `2000` | Events kept per job for replay. |
-| `ENVCRAFTER_SUBSCRIBER_QUEUE_SIZE` | `500` | Per-subscriber event queue before it is considered lagged. |
-| `ENVCRAFTER_JOB_RETENTION_SECONDS` | `3600` | How long a finished job stays in memory (see Limitations). |
-| `ENVCRAFTER_PLAN_TTL_SECONDS` | `900` | How long a reviewed AI plan can still be deployed. |
-| `ENVCRAFTER_MAX_PLANS` | `32` | Plans kept in memory at once (oldest evicted first). |
-| `ENVCRAFTER_INVENTORY_CACHE_SECONDS` | `2` | How long a `docker ps` result is reused across dashboard polls. |
-| `ENVCRAFTER_READINESS_CACHE_SECONDS` | `2` | How long one Docker reading serves the setup check, the capacity check before deploying and the CPU/memory of an environment. |
-| `ENVCRAFTER_HEALTH_POLL_SECONDS` | `5` | Health-watcher poll period during startup. |
-| `ENVCRAFTER_PROGRESS_INTERVAL_SECONDS` | `0.5` | Minimum interval between `step.progress` events. |
-| `ENVCRAFTER_LOG_TAIL_MAX` | `1000` | Largest `tail` accepted on the logs WebSocket. |
-| `ENVCRAFTER_MAX_LOG_STREAMS` | `4` | Concurrent container log streams. |
-| `ENVCRAFTER_SIMULATED_STEP_DELAY` | `0.4` | Delay between simulated engine steps (dev/tests only). |
-
-The defaults above for `ENVCRAFTER_TEMPLATES_DIR`, `ENVCRAFTER_WORKSPACES_DIR`,
-`ENVCRAFTER_SETTINGS_FILE`, `ENVCRAFTER_HISTORY_FILE` and `ENVCRAFTER_FRONTEND_DIR` apply to
-the local dev server; the control-plane image sets its own values (`/app/templates`,
-`/data/workspaces`, `/data/settings/settings.json`, `/data/settings/history.sqlite3`,
-`/app/frontend`) as `ENV` in `backend/Dockerfile`, matching where it copies those
-directories or mounts its volumes inside the container.
-
-## API overview
-
-### REST endpoints
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/api/health` | Liveness check. |
-| GET | `/api/config` | Capabilities the UI adapts to: version, engine, LLM availability, public domain, project name pattern. |
-| GET | `/api/templates` | Template catalog (categories + templates). |
-| GET | `/api/templates/{template_id}/logo` | Template logo bytes, if any. |
-| GET | `/api/templates/{template_id}/readiness` | What deploying the template needs here: images already downloaded, download left, memory needed and available, free disk space, warnings. |
-| GET | `/api/system` | First-run checklist: Docker, the reverse proxy, free memory and disk, the AI key. |
-| POST | `/api/jobs` | Start a deployment: `{"mode": "template", "template_id": ...}` (optionally with `parameters`, the template's options), `{"mode": "prompt", "prompt": ...}`, or `{"mode": "plan", "plan_id": ...}`, each with an optional `project_name` (else `<template>-<n>`), `timezone` (IANA name, e.g. `Europe/Paris`) and `keep_on_failure`. Returns `202` with `job_id` and `events_url`; `422` for an option the template does not offer. |
-| GET | `/api/jobs` | List retained jobs (`?active=true` for queued/running only). |
-| GET | `/api/jobs/{job_id}` | One job's current summary. |
-| POST | `/api/jobs/{job_id}/cancel` | Stop a running deployment (rolled back) or AI analysis; the job ends with `job.cancelled`. Returns `202`; `409` for other jobs or jobs already over. |
-| POST | `/api/plans` | Turn a natural-language prompt into a reviewable plan (`202` job; nothing is deployed). |
-| GET | `/api/plans/{plan_id}` | The reviewable plan: components, images, network access, storage, secret count. |
-| GET | `/api/environments` | Every environment with its live state. |
-| GET | `/api/environments/{project}` | One environment's state and services. |
-| PATCH | `/api/environments/{project}` | `{"title": ..., "notes": ...}` (one or both): change the display title or the notes. `409` while a job runs on it. |
-| GET | `/api/environments/{project}/usage` | CPU and memory of each running service (one `docker stats` sample, shared for a few seconds). |
-| GET | `/api/environments/{project}/activity` | Its jobs and edits since its latest deployment, newest first (`?limit=`, at most 200). |
-| POST | `/api/environments/{project}/actions` | Lifecycle action: `{"action": "stop"\|"start"\|"restart"}`, or `{"action": "restart", "service": ...}` to restart one service. Returns `202`. |
-| DELETE | `/api/environments/{project}` | Remove an environment (containers, networks, volumes, workspace). Returns `202`. |
-| GET | `/api/settings` | Whether a Claude API key is configured, its source (`settings` or `environment`), its last four characters and the model. Never the key. |
-| PUT | `/api/settings/llm-key` | `{"api_key": ...}`: check the key with the Claude API, then store and use it. `400` when the API refuses it, `502` when the API cannot be reached; nothing is stored then. |
-| DELETE | `/api/settings/llm-key` | Forget the key saved from the UI (the `.env` key, if any, is used again). |
-
-### WebSockets
-
-| Endpoint | Purpose |
-|---|---|
-| `WS /ws/jobs/{job_id}?after_seq=N` | Job progress: replays events after sequence `N`, then streams live ones. |
-| `WS /ws/environments/{project}/logs?service=<name>&tail=<n>` | Live container log lines for one service (secrets redacted). |
-
-Close codes on both channels: `1000` normal end (do not reconnect), `1008`
-policy violation — bad Origin, bad params, unexpected client data (do not
-reconnect), `1013` try again — subscriber lagged or too many concurrent log
-streams (reconnect), `4404` unknown or expired job/environment/service (do
-not reconnect); any other close (e.g. `1006`) should be retried with backoff.
-
-### Event types
-
-`job.accepted`, `step.started`, `step.log`, `step.progress`, `step.completed`,
-`step.failed`, `job.succeeded`, `job.failed`, `job.cancelled`. `job.failed`
-carries `retryable` (whether the same request may succeed if sent again) and,
-for a deployment kept for debugging, `kept`.
+To work on EnvCrafter itself, a development server runs the whole pipeline
+with a simulated engine, without Docker: see
+[Development](docs/DOCUMENTATION.md#development).
 
 ## Templates
 
@@ -317,122 +126,34 @@ for a deployment kept for debugging, `kept`.
 | Forgejo | Development & databases | Forgejo, PostgreSQL, Mailpit | 256 MB | 350 MB | ~45 s |
 | Mailpit | Development & databases | Mailpit | 14 MB | 30 MB | ~10 s |
 
-Footprint figures are approximate, measured on `linux/amd64` with images
-already cached; the end-to-end suite measures them on every run and warns
-(without failing) when a template's manifest underestimates them.
+Footprints are approximate (`linux/amd64`, images already downloaded). To add
+your own template, see [Adding a template](docs/DOCUMENTATION.md#adding-a-template).
 
-### Adding a template
+## Current limitations
 
-1. Add every image the template needs to `backend/app/policy/image_allowlist.yaml`
-   first: a canonical, pinned reference (tag or digest) and a description of
-   its environment variables.
-2. Write `compose.yaml` as a *source* stack: no `ports`, no `networks:` block,
-   no container names, no Traefik labels. Services use `networks: [internal]`
-   by default, or add `egress` if they need the Internet. Use named volumes,
-   `${SECRET}` placeholders for generated secrets, `${EC_TZ}` for time zone
-   variables (`TZ`, `PHP_TZ`...), and a healthcheck on every web service (the
-   test suite enforces it: without one, a UI is reported ready before it answers).
-3. Write `manifest.yaml`: every service under `components`, the web UIs under
-   `expose` (the first one becomes `<project>.localhost`, the others
-   `<service>.<project>.localhost`), the `secrets` to generate, `access_notes`
-   (default credentials, first-run steps), and a required `footprint`
-   (`download_mb`, `memory_mb`, `first_start_seconds`). An optional
-   `logo: logo.png` or `logo.webp` (≤ 64 KiB) can sit next to the manifest —
-   check the software's logo usage policy before publishing it. Start the file
-   with `# yaml-language-server: $schema=../../manifest.schema.json` for
-   completion and validation in editors. Secret names starting with `EC_` are
-   reserved for built-in variables. Optional:
-   - `parameters`: options chosen before deploying, written to the workspace
-     `.env` and referenced as `${NAME}` in `compose.yaml` — `enum` (a list of
-     `{value, label}` and a `default`) or `boolean` (written `true`/`false`);
-   - `disposable: true` for a lab that holds nothing worth keeping: removing it
-     asks for a simple confirmation instead of its name.
-4. Check the catalog from `backend/`: `uv run python -m app.tools.template_lint`
-   applies the startup rules template by template. The application itself
-   refuses to start if a template breaks the security policy or its manifest
-   disagrees with its compose file. Then run the end-to-end test for the new
-   template.
+Some of these may be lifted in future versions: the [roadmap](ROADMAP.md)
+lists what is planned.
 
-## Testing
-
-From `backend/`:
-
-```bash
-uv run pytest                # unit and API tests (simulated engine)
-uv run ruff check .          # lint
-uv run ruff format --check . # formatting
-uv run mypy app              # type checking (strict)
-uv run python -m app.tools.template_lint  # template catalog + manifest schema
-```
-
-CI runs these checks on Linux and Windows for every push to `main` and every
-pull request.
-
-End-to-end, against the real control plane (slow, pulls images):
-
-```bash
-ENVCRAFTER_E2E=1 uv run pytest tests/e2e -v
-# also exercise the real AI flow (costs one request):
-ENVCRAFTER_E2E_LLM=1 ENVCRAFTER_E2E=1 uv run pytest tests/e2e -v
-```
-
-Browser UI tests (Playwright + axe, opt-in), against the simulated engine:
-
-```bash
-ENVCRAFTER_UI=1 uv run pytest tests/ui --browser-channel msedge
-# or, without a local Edge install:
-uv run playwright install chromium
-ENVCRAFTER_UI=1 uv run pytest tests/ui
-```
-
-## Project layout
-
-- `backend/`: Python 3.12+, FastAPI, asyncio, Pydantic v2. Entry point:
-  `app/main.py` (app factory + lifespan). `app/tools/`: the template lint
-  command.
-  - `app/api/`: REST routes, WebSocket streams, dependency providers.
-  - `app/core/`: settings, request guards, security headers.
-  - `app/models/`: typed contracts for requests, events, templates, plans,
-    environments, capabilities.
-  - `app/policy/`: the compose security gate, the image allow-list, the
-    hardened YAML loader.
-  - `app/translator/`: the Claude-backed translator and its output contract.
-  - `app/workspace/`: the compose renderer (networks, labels, Traefik routes)
-    and workspace files.
-  - `app/engine/`: the real engine (via the socket proxy) and the simulated
-    one used in development and tests.
-  - `app/services/`: the deployment pipeline, the real-time event bus, the
-    environment inventory, container log streaming, the plan store, the
-    template catalog, the SQLite history, the readiness and usage readings.
-  - `tests/`: unit and API tests, `tests/e2e/` (opt-in, real control plane),
-    `tests/ui/` (opt-in, Playwright).
-- `frontend/`: static HTML/CSS and vanilla ES modules — no framework, no
-  bundler, no npm.
-- `templates/<category>/<id>/`: `manifest.yaml` (what users see) and
-  `compose.yaml` (the source stack) for each template.
-- `deploy/`: the control plane (`docker-compose.yml`: Traefik, two socket
-  proxies, the API) and Traefik configuration.
-- `workspaces/`: runtime output — generated compose files, secrets and
-  metadata for each deployed environment. Git-ignored.
-- `data/`: settings saved from the UI (the Claude API key) and the history
-  database. Git-ignored.
-- `ROADMAP.md`: what comes next, and what is already done.
-
-## Limitations
-
-- The real-time event bus is in-process: run a single Uvicorn worker.
-- The step-by-step events of a job stay in memory for about one hour; its
-  summary is kept in the SQLite history. Durable truth is always the
-  workspace files and the Docker state.
-- Volume sizes are not shown: reading them needs Docker's system endpoint,
-  which the API's socket proxy does not allow.
-- Docker Desktop on Windows is supported through the containerized control
-  plane; the local development server (`uv run uvicorn ...`) always runs the
+- **Localhost only** — there is no built-in authentication: do not expose
+  EnvCrafter beyond `127.0.0.1` without putting an authenticating proxy in
+  front of it.
+- **Linux containers only.**
+- **A single API worker** — the real-time event bus is in-process: run a
+  single Uvicorn worker.
+- **Job details kept for about an hour** — the step-by-step events of a job
+  stay in memory for about one hour; its summary is kept in the history.
+  Durable truth is always the workspace files and the Docker state.
+- **No volume sizes** — reading them needs Docker's system endpoint, which the
+  API's socket proxy does not allow.
+- **Windows** — Docker Desktop on Windows is supported through the
+  containerized control plane; the local development server always runs the
   simulated engine and never deploys real containers.
-- Designed for localhost use. There is no built-in authentication: do not
-  expose EnvCrafter beyond `127.0.0.1` without putting an authenticating
-  proxy in front of it.
-- Linux containers only.
+
+## Documentation
+
+- [Technical documentation](docs/DOCUMENTATION.md): architecture, security
+  model, configuration, API, adding a template, development and tests.
+- [Roadmap](ROADMAP.md): what comes next, and what is already done.
 
 ## License
 

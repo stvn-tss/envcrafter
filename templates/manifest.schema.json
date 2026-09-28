@@ -176,7 +176,7 @@
     },
     "TemplateFootprint": {
       "additionalProperties": false,
-      "description": "Approximate weight of a template on linux/amd64 (see README, \"Adding a template\").",
+      "description": "Approximate weight on linux/amd64 (see docs/DOCUMENTATION.md, \"Adding a template\").",
       "properties": {
         "download_mb": {
           "maximum": 100000,
